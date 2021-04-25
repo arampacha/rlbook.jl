@@ -39,12 +39,12 @@ end
 get_reward(q, 1)
 
 # ╔═╡ 15f1567e-c69a-4ff6-8276-114628be3018
-function experiment(N=100, t=1000, trial=trial; trial_kwargs...)
+function experiment(N=100, T=1000, trial=trial, q_mean=0.; trial_kwargs...)
 	opt_pcts = []
 	average_rewards = []
 	for i = 1:N
-		q = randn(10)
-		res = trial(q, t; trial_kwargs...)
+		q = randn(10) .+ q_mean
+		res = trial(q, T; trial_kwargs...)
 		push!(opt_pcts, res.opt_pct)
 		push!(average_rewards, res.avg_reward)
 	end
@@ -60,21 +60,26 @@ end
 # ╔═╡ e084c765-f5e4-4bbb-b6dc-db72207bb6a1
 let 
 	if show0
-		opt_pcts, average_rewards = experiment(𝛆=eps1)
-		p1 = plot()
+		opt_pcts, average_rewards = experiment(ε=eps1)
+		p1 = plot(title="Average reward", legend=:bottomright)
 		for r = average_rewards
 			plot!(p1, r, label=nothing, opacity=0.3)
 		end
 		plot!(p1, mean(average_rewards), lw=3, label="mean", colour="black")
 
-		p2 = plot()
+		p2 = plot(title="Optimal action %", legend=:bottomright)
 		for pct = opt_pcts
 			plot!(p2, pct, label=nothing, opacity=0.3)
 		end
 		plot!(p2, mean(opt_pcts), lw=3, label="mean", colour="black")
 		plot(p1, p2, layout=(2, 1))
+	
 	end
+		
 end
+
+# ╔═╡ 42797c0e-6785-4868-a78a-5f492351476d
+@bind show_std CheckBox()
 
 # ╔═╡ 7fb0c7d1-cd78-4996-aca9-c16dd7989d2a
 @bind show1 CheckBox()
@@ -86,10 +91,11 @@ end
 let 
 	if show1
 		upd1
+		
 		N = 200
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 		for eps = [0., .01, .1]
-			opt_pcts, average_rewards = experiment(N, 𝛆=eps)
+			opt_pcts, average_rewards = experiment(N, ε=eps)
 			if eps == 0.
 				l = "ε = 0 (greedy)"
 			else
@@ -111,13 +117,18 @@ end
 # ╔═╡ 6a2bcf9e-f4d4-4e7e-9686-16fe8055c03d
 @bind show_opt CheckBox()
 
+# ╔═╡ 8a35ab08-a496-4599-bdd9-4f0a03b8bd01
+@bind upd_opt Button("Rerun")
+
 # ╔═╡ 2889dd86-c0fc-4cee-9a2d-6b829cb746e1
 let 
 	if show_opt
+		upd_opt
+		
 		N = 200
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 		for eps = [0., .1], q_init = [5., 0.]
-			opt_pcts, average_rewards = experiment(N; 𝛆=eps, q_init=q_init)
+			opt_pcts, average_rewards = experiment(N; ε=eps, q_init=q_init)
 			if eps == 0.
 				l = "ε=0 (greedy), q₁=$q_init"
 			else
@@ -133,8 +144,12 @@ end
 # ╔═╡ 6eaf46db-dd07-4a47-96b1-6a07c632a79a
 @bind pa Slider(0.:0.01:1., show_value=true, default=0.1)
 
+# ╔═╡ e4012f10-c56a-48e1-adfb-07cfc07c4d87
+@bind upd_pot Button("Refresh")
+
 # ╔═╡ 01d8ac29-c38e-4641-a6c8-8a05add94890
 let
+	upd_pot
 	t = 1:100
 	c = 1
 	na = accumulate(+, [Int(rand()<pa) for _=t])
@@ -146,8 +161,14 @@ end
 # ╔═╡ 8b4765e8-e2dd-4d0f-b86e-9d5afb6e77d2
 @bind show_ubc CheckBox()
 
+# ╔═╡ 6cc2ca49-8d5d-411a-82c3-01f11c6743bd
+@bind upd_ubc Button("Rerun")
+
 # ╔═╡ 09b803c6-f06d-4813-bade-c0f93321daa3
 @bind show_grad CheckBox()
+
+# ╔═╡ 9bae2290-32c3-4b75-91b1-f589e421bcdb
+@bind upd_grad Button("Rerun")
 
 # ╔═╡ f720ba6c-c199-48e7-bebb-aaeae7654536
 @bind show_ps CheckBox()
@@ -179,8 +200,14 @@ function getindex(collection, idx, default)
 	end
 end
 
+# ╔═╡ cf6cb7ee-84d8-48fa-9573-07dfacee5962
+md"Show plot"
+
 # ╔═╡ 0b68c4f7-ba82-4e86-b4ad-0d52e8d510a4
 md"ε"
+
+# ╔═╡ 033f1958-f54a-4398-a1fd-a7d1c2dd6da5
+md"Plot average rewards with std"
 
 # ╔═╡ 49f80719-524e-426c-b0f5-b8c8e2463692
 md"## ε-greedy strategies"
@@ -238,18 +265,16 @@ function accumulate_mean!(collection, val)
 end
 
 # ╔═╡ c08545e2-5218-4489-8975-5c3f86c66345
-function trial(q, t=1000; 𝛆=0., q_init=0., walk_std=0.)
+function trial(q, T=1000; ε=0., q_init=0., walk_std=0.)
 	k = length(q)
 	a_optimal_pct = []
 	avg_reward = []
 	q_est = zeros(k) .+ q_init
 	a_counts = zeros(k)
-	for i = 1:t
+	for t = 1:T
 		
 		a_optimal = argmax(q)
-		# if 𝛆 == 0.
-		# 	a = argmax(q_est)
-		if rand() > 𝛆
+		if rand() > ε
 			a = argmax(q_est)
 		else
 			a = randint(k)
@@ -260,7 +285,7 @@ function trial(q, t=1000; 𝛆=0., q_init=0., walk_std=0.)
 		accumulate_mean!(avg_reward, r)
 		
 		a_counts[a] += 1
-		q_est[a] += (r-q_est[a])/a_counts[a]
+		q_est[a] += (r-q_est[a]) / a_counts[a]
 		
 		if walk_std ≠ 0.
 			q = q + randn(k)*walk_std
@@ -278,7 +303,7 @@ let
 end
 
 # ╔═╡ 018c6afe-6a60-4aee-a4da-8612955b64d2
-function ema_trial(q, t=1000; 𝛆=0., q_init=0., walk_std=0., α=0.1, unbiased=false)
+function ema_trial(q, T=1000; ε=0., q_init=0., walk_std=0., α=0.1, unbiased=false)
 	k = length(q)
 	a_optimal_pct = []
 	avg_reward = []
@@ -288,9 +313,9 @@ function ema_trial(q, t=1000; 𝛆=0., q_init=0., walk_std=0., α=0.1, unbiased=
 	
 	ō = 0
 	
-	for i = 1:t
+	for t = 1:T
 		a_optimal = argmax(q)
-		if 𝛆 ≠ 0. && rand() > 𝛆
+		if ε ≠ 0. && rand() > ε
 			a = argmax(q_est)
 		else
 			a = randint(k)
@@ -329,20 +354,21 @@ unbiased_ema_trial = (args...; kwargs...) -> ema_trial(args...; kwargs...,  unbi
 let 
 	if show2
 		show_unbiased
+		
 		N = 200
 		t = 10000
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
-		opt_pcts, average_rewards = experiment(N, t, trial; 𝛆=0.1, walk_std=0.01)
+		opt_pcts, average_rewards = experiment(N, t, trial; ε=0.1, walk_std=0.01)
 		plot!(p1, mean(average_rewards), lw=2, label="sample avg")
 		plot!(p2, mean(opt_pcts), lw=2, label="sample average")
 
-		opt_pcts, average_rewards = experiment(N, t, ema_trial; 𝛆=0.1, walk_std=0.01)
+		opt_pcts, average_rewards = experiment(N, t, ema_trial; ε=0.1, walk_std=0.01)
 		plot!(p1, mean(average_rewards), lw=2, label="ema")
 		plot!(p2, mean(opt_pcts), lw=2, label="ema")
 
 		if show_unbiased
 
-			opt_pcts, average_rewards = experiment(N, t, unbiased_ema_trial; 𝛆=0.1, walk_std=0.01)
+			opt_pcts, average_rewards = experiment(N, t, unbiased_ema_trial; ε=0.1, walk_std=0.01)
 			plot!(p1, mean(average_rewards), lw=2, label="unbiased ema")
 			plot!(p2, mean(opt_pcts), lw=2, label="unbiased ema")
 		end
@@ -352,17 +378,17 @@ let
 end
 
 # ╔═╡ d0e247a0-2c40-474c-b359-4d2fc045e882
-function ucb_trial(q, t=1000; 𝛆=0., q_init=0., walk_std=0., c=2.)
+function ucb_trial(q, T=1000; ε=0., q_init=0., walk_std=0., c=2.)
 	k = length(q)
 	a_optimal_pct = []
 	avg_reward = []
 	q_est = zeros(k) .+ q_init
 	a_counts = zeros(k)
-	for i = 1:t
+	for t = 1:T
 		
 		a_optimal = argmax(q)
 		
-		potentials = sqrt.(log(i)./(a_counts .+ 1e-5))
+		potentials = sqrt.(log(t)./(a_counts .+ 1e-5))
 		
 		a = argmax(q_est + potentials)
 		accumulate_mean!(a_optimal_pct, Int(a == a_optimal))
@@ -383,16 +409,18 @@ end
 # ╔═╡ 286c4c5d-bac8-4a46-9bbb-f1cbb75c9605
 let 
 	if show_ubc
+		upd_ubc
+		
 		N = 100
-		t = 1000
+		T = 1000
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 
-		opt_pcts, average_rewards = experiment(N, 𝛆=0.1)
+		opt_pcts, average_rewards = experiment(N, ε=0.1)
 		plot!(p1, mean(average_rewards), lw=2, label="ε = 0.1")
 		plot!(p2, mean(opt_pcts), lw=2, label="ε = 0.1")
 		
 		c = 2.
-		opt_pcts, average_rewards = experiment(N, t, ucb_trial; c=c)
+		opt_pcts, average_rewards = experiment(N, T, ucb_trial; c=c)
 		plot!(p1, mean(average_rewards), lw=2, label="UCB, c=$c")
 		plot!(p2, mean(opt_pcts), lw=2, label="UCB, c=$c")
 
@@ -401,16 +429,16 @@ let
 end
 
 # ╔═╡ aa4d7178-5058-4caa-a5a6-1b6c96ede324
-function grad_trial(q, t=1000; q_init=0., walk_std=0., α=0.1, baseline=true)
+function grad_trial(q, T=1000; q_init=0., walk_std=0., α=0.1, baseline=true)
 	k = length(q)
 	a_optimal_pct = []
 	avg_reward = []
 	
 	q_est = zeros(k) .+ q_init
 	a_counts = zeros(k) ./ k
-	h = ones(k)
+	h = zeros(k)
 	
-	for i = 1:t
+	for t = 1:T
 		
 		a_optimal = argmax(q)
 		π = softmax(h)
@@ -421,10 +449,10 @@ function grad_trial(q, t=1000; q_init=0., walk_std=0., α=0.1, baseline=true)
 		accumulate_mean!(avg_reward, r)
 		
 		if baseline
-			if i == 1
+			if t == 1
 				r̄ = r
 			else
-				r̄ = avg_reward[i-1]
+				r̄ = avg_reward[t-1] # in book it's mentioned that current reward was included in update for their simulations; this can be achieved by using avg_reward[t]
 			end
 		else
 			r̄ = 0
@@ -456,26 +484,29 @@ end
 # ╔═╡ adffebe6-685a-46ab-93dd-5699f754ce99
 let 
 	if show_grad
+		upd_grad
+		
 		N = 200
 		T = 1000
+		q_mean = 4.
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 
 		α = 0.1
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4.)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial, q_mean; α=α)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α")
 		
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4., baseline=false)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial, q_mean; α=α, baseline=false)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α, w/o baseline")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α, w/o baseline")
 
 		
 		α = 0.4
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4.)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial, q_mean; α=α)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α")
 		
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4., baseline=false)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial, q_mean; α=α, baseline=false)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α, w/o baseline")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α, w/o baseline")
 		
@@ -488,6 +519,7 @@ end
 # ╔═╡ 2faf1f5e-9534-4913-ba7f-72ee9a8150ff
 let
 	if show_ps
+		
 		N = 100
 		T = 1000
 		p = plot(xscale=:log, legend=:bottomright)
@@ -496,7 +528,7 @@ let
 		εs = [2. ^i for i = -7:-2]
 		ε_avg = []
 		for ε in εs
-			_, avgr = experiment(N, T, trial; 𝛆=ε)
+			_, avgr = experiment(N, T, trial; ε=ε)
 			push!(ε_avg, mean(avgr)[end])
 		end
 		plot!(p, εs, ε_avg, label="ε-greedy")
@@ -544,25 +576,54 @@ let
 	a
 end
 
+# ╔═╡ 00623f53-5a44-4c42-8e16-cafe490f642a
+function plot_average_rewards(average_rewards, with_std=true, xtra=0)
+	p = plot(title="Average rewards")
+	
+	if xtra ≠ 0
+		for x in average_rewards
+			plot!(p, x, opacity=0.3)
+		end
+	end
+	
+	μ = mean(average_rewards)
+	σ = std(average_rewards, mean=μ)
+	plot!(p, μ, ribbon=σ, lw=2)
+	
+	return p
+end
+
+# ╔═╡ faaa8dc7-c5c4-47cc-823a-1a116ba2a5e5
+let
+	if show_std
+		opt_pcts, average_rewards = experiment(ε=eps1)
+		plot_average_rewards(average_rewards)
+	end
+end
+
 # ╔═╡ Cell order:
 # ╟─48d4dd64-a47d-11eb-14d1-6161cbc1413a
 # ╠═3f4a1865-6b69-4485-a285-b4ebee56c015
 # ╠═a26cf864-d5a4-4d9e-91ad-fbfe4e385d87
 # ╠═351277e6-6777-417b-96b8-023b4ef5707d
-# ╟─c08545e2-5218-4489-8975-5c3f86c66345
+# ╠═c08545e2-5218-4489-8975-5c3f86c66345
 # ╠═86e725ba-ff06-4aa4-bd85-0c1b6f30065b
 # ╠═15f1567e-c69a-4ff6-8276-114628be3018
+# ╟─cf6cb7ee-84d8-48fa-9573-07dfacee5962
 # ╟─baa33a22-49e9-4469-b707-585a786d8124
 # ╟─0b68c4f7-ba82-4e86-b4ad-0d52e8d510a4
 # ╟─c311c9d2-cfd1-41b9-a47c-b5d7620e5937
 # ╠═e084c765-f5e4-4bbb-b6dc-db72207bb6a1
+# ╟─033f1958-f54a-4398-a1fd-a7d1c2dd6da5
+# ╟─42797c0e-6785-4868-a78a-5f492351476d
+# ╠═faaa8dc7-c5c4-47cc-823a-1a116ba2a5e5
 # ╟─49f80719-524e-426c-b0f5-b8c8e2463692
 # ╟─4910f9fb-3a75-40ce-bb1f-e5fcfe3b3da4
 # ╟─7fb0c7d1-cd78-4996-aca9-c16dd7989d2a
 # ╟─09e5bc8f-ed94-4d16-b722-27c3d6aaf56f
 # ╠═770c1609-10aa-4720-b2d0-b89e64d18a9c
 # ╟─029983e9-40fc-45a6-b4ef-4af0e5d96327
-# ╟─018c6afe-6a60-4aee-a4da-8612955b64d2
+# ╠═018c6afe-6a60-4aee-a4da-8612955b64d2
 # ╠═0bbdea00-060b-4ce0-a3e2-d3dc5d141649
 # ╠═731acaab-e910-40bf-915e-7868d742abd1
 # ╟─eb826b48-6fc2-468e-8bc7-d96861307b71
@@ -573,23 +634,27 @@ end
 # ╟─e9831e70-5052-494e-8682-a88a37fbbd61
 # ╟─b2df3274-7981-4fb6-82fa-d58354e02b60
 # ╟─6a2bcf9e-f4d4-4e7e-9686-16fe8055c03d
+# ╟─8a35ab08-a496-4599-bdd9-4f0a03b8bd01
 # ╠═2889dd86-c0fc-4cee-9a2d-6b829cb746e1
 # ╟─4b672fe5-fb95-4d00-b8d0-1621b8d62ec9
 # ╟─f4bbe00c-b033-415c-9c8e-e877270adc8f
 # ╟─6eaf46db-dd07-4a47-96b1-6a07c632a79a
+# ╟─e4012f10-c56a-48e1-adfb-07cfc07c4d87
 # ╟─01d8ac29-c38e-4641-a6c8-8a05add94890
 # ╠═d0e247a0-2c40-474c-b359-4d2fc045e882
 # ╟─939cb982-427e-4c4f-91fa-dc60acb97a01
 # ╟─8b4765e8-e2dd-4d0f-b86e-9d5afb6e77d2
+# ╟─6cc2ca49-8d5d-411a-82c3-01f11c6743bd
 # ╠═286c4c5d-bac8-4a46-9bbb-f1cbb75c9605
 # ╟─f35e791f-9abf-4c70-ba2b-67139332b98f
 # ╠═aa4d7178-5058-4caa-a5a6-1b6c96ede324
 # ╠═609c08da-2250-4788-ac7d-fe381a5d34b6
 # ╟─09b803c6-f06d-4813-bade-c0f93321daa3
+# ╟─9bae2290-32c3-4b75-91b1-f589e421bcdb
 # ╠═adffebe6-685a-46ab-93dd-5699f754ce99
 # ╟─bf7d348b-c059-4cc2-9fc6-560f64751104
 # ╟─b88c8d7e-20b2-4ab6-9a4c-492486cac649
-# ╠═f720ba6c-c199-48e7-bebb-aaeae7654536
+# ╟─f720ba6c-c199-48e7-bebb-aaeae7654536
 # ╠═2faf1f5e-9534-4913-ba7f-72ee9a8150ff
 # ╟─8bd817d4-9cce-44ee-8595-567119a4cf43
 # ╟─655ee62d-cd27-47c8-b3df-622aa539b98f
@@ -599,3 +664,4 @@ end
 # ╟─c2417fcc-016d-4be4-a1f0-b32a85b6a5a1
 # ╟─ef167d48-dd50-4bb3-9ada-d53ec0b9e3a6
 # ╟─5f88d99c-1ef3-4223-82bd-3a29a033db54
+# ╠═00623f53-5a44-4c42-8e16-cafe490f642a
