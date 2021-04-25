@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.2
+# v0.14.3
 
 using Markdown
 using InteractiveUtils
@@ -149,6 +149,9 @@ end
 # ╔═╡ 09b803c6-f06d-4813-bade-c0f93321daa3
 @bind show_grad CheckBox()
 
+# ╔═╡ f720ba6c-c199-48e7-bebb-aaeae7654536
+@bind show_ps CheckBox()
+
 # ╔═╡ 655ee62d-cd27-47c8-b3df-622aa539b98f
 function softmax(x::Vector)
 	return exp.(x .- maximum(x)) ./ sum(exp.(x .- maximum(x)))
@@ -212,8 +215,11 @@ md"Show UBC"
 # ╔═╡ f35e791f-9abf-4c70-ba2b-67139332b98f
 md"## Gradient bandit"
 
-# ╔═╡ ff3f9ee1-d75e-4a48-890b-6c6203eca260
-md"> Note: This is rather slow and needs to be opimised"
+# ╔═╡ bf7d348b-c059-4cc2-9fc6-560f64751104
+md"## Parameter study"
+
+# ╔═╡ b88c8d7e-20b2-4ab6-9a4c-492486cac649
+md"Plot parameter study"
 
 # ╔═╡ 8bd817d4-9cce-44ee-8595-567119a4cf43
 md"## utils"
@@ -336,7 +342,7 @@ let
 
 		if show_unbiased
 
-			opt_pcts, average_rewards = experiment(N, t, 𝛆=0.1, walk_std=0.01, trial=unbiased_ema_trial)
+			opt_pcts, average_rewards = experiment(N, t, unbiased_ema_trial; 𝛆=0.1, walk_std=0.01)
 			plot!(p1, mean(average_rewards), lw=2, label="unbiased ema")
 			plot!(p2, mean(opt_pcts), lw=2, label="unbiased ema")
 		end
@@ -415,7 +421,11 @@ function grad_trial(q, t=1000; q_init=0., walk_std=0., α=0.1, baseline=true)
 		accumulate_mean!(avg_reward, r)
 		
 		if baseline
-			r̄ = getindex(avg_reward, :end, 0)
+			if i == 1
+				r̄ = r
+			else
+				r̄ = avg_reward[i-1]
+			end
 		else
 			r̄ = 0
 		end
@@ -432,34 +442,96 @@ function grad_trial(q, t=1000; q_init=0., walk_std=0., α=0.1, baseline=true)
 			q = q + randn(k)*walk_std
 		end
 	end
-	return (q_est=nothing, avg_reward=avg_reward, opt_pct=a_optimal_pct)
+	return (q_est=nothing, avg_reward=avg_reward, opt_pct=a_optimal_pct, h=h, q=q)
 end
 
 # ╔═╡ 609c08da-2250-4788-ac7d-fe381a5d34b6
 let
-	res = grad_trial(q, 1000, baseline=false)
+	res = grad_trial(q, 1000, baseline=true)
 	
-	plot(res.opt_pct, label=nothing)
+	res.h, res.q
+	# plot(res.opt_pct, label=nothing)
 end
 
 # ╔═╡ adffebe6-685a-46ab-93dd-5699f754ce99
 let 
 	if show_grad
-		N = 100
+		N = 200
 		T = 1000
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 
 		α = 0.1
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=0.1, q_init=4.)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4.)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α")
 		
-		α = 0.1
-		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=0.1, q_init=4., baseline=false)
+		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4., baseline=false)
 		plot!(p1, mean(average_rewards), lw=2, label="α=$α, w/o baseline")
 		plot!(p2, mean(opt_pcts), lw=2, label="α=$α, w/o baseline")
 
+		
+		α = 0.4
+		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4.)
+		plot!(p1, mean(average_rewards), lw=2, label="α=$α")
+		plot!(p2, mean(opt_pcts), lw=2, label="α=$α")
+		
+		opt_pcts, average_rewards = experiment(N, T, grad_trial; α=α, q_init=4., baseline=false)
+		plot!(p1, mean(average_rewards), lw=2, label="α=$α, w/o baseline")
+		plot!(p2, mean(opt_pcts), lw=2, label="α=$α, w/o baseline")
+		
+		
 		plot(p1, p2, layout=(2, 1))
+		
+	end
+end
+
+# ╔═╡ 2faf1f5e-9534-4913-ba7f-72ee9a8150ff
+let
+	if show_ps
+		N = 100
+		T = 1000
+		p = plot(xscale=:log, legend=:bottomright)
+
+		# epsilon greedy
+		εs = [2. ^i for i = -7:-2]
+		ε_avg = []
+		for ε in εs
+			_, avgr = experiment(N, T, trial; 𝛆=ε)
+			push!(ε_avg, mean(avgr)[end])
+		end
+		plot!(p, εs, ε_avg, label="ε-greedy")
+
+
+		# optimistic greedy
+		q_init = [2. ^i for i = -2:2]
+		q_avg = []
+		for q0 in q_init
+			_, avgr = experiment(N, T, trial; q_init=q0)
+			push!(q_avg, mean(avgr)[end])
+		end
+		plot!(p, q_init, q_avg, label="optimistic")
+
+		# UCB
+		cs = [2. ^i for i = -4:2]
+		ucb_avg = []
+		for c in cs
+			_, avgr = experiment(N, T, ucb_trial; c=c)
+			push!(ucb_avg, mean(avgr)[end])
+		end
+		plot!(p, cs, ucb_avg, label="UCB")
+
+		# gradient bandit
+		αs = [2. ^i for i = -5:1]
+		grad_avg = []
+		for α in αs
+			_, avgr = experiment(N, T, grad_trial; α=α)
+			push!(grad_avg, mean(avgr)[end])
+		end
+		plot!(p, αs, grad_avg, label="gradient")
+		
+		# plot
+		ylabel!(p, "Average reward, 1000 steps")
+		p
 	end
 end
 
@@ -511,11 +583,14 @@ end
 # ╟─8b4765e8-e2dd-4d0f-b86e-9d5afb6e77d2
 # ╠═286c4c5d-bac8-4a46-9bbb-f1cbb75c9605
 # ╟─f35e791f-9abf-4c70-ba2b-67139332b98f
-# ╟─ff3f9ee1-d75e-4a48-890b-6c6203eca260
 # ╠═aa4d7178-5058-4caa-a5a6-1b6c96ede324
 # ╠═609c08da-2250-4788-ac7d-fe381a5d34b6
 # ╟─09b803c6-f06d-4813-bade-c0f93321daa3
 # ╠═adffebe6-685a-46ab-93dd-5699f754ce99
+# ╟─bf7d348b-c059-4cc2-9fc6-560f64751104
+# ╟─b88c8d7e-20b2-4ab6-9a4c-492486cac649
+# ╠═f720ba6c-c199-48e7-bebb-aaeae7654536
+# ╠═2faf1f5e-9534-4913-ba7f-72ee9a8150ff
 # ╟─8bd817d4-9cce-44ee-8595-567119a4cf43
 # ╟─655ee62d-cd27-47c8-b3df-622aa539b98f
 # ╟─92a924e6-8189-40e6-9cdf-3fad210267c8
