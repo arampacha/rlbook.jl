@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.3
+# v0.14.4
 
 using Markdown
 using InteractiveUtils
@@ -141,6 +141,21 @@ let
 	end
 end
 
+# ╔═╡ 462bb53b-a215-4cc7-ab97-a5b8260c423e
+@bind ta  Slider(5:1000, default=100, show_value=true)
+
+# ╔═╡ 638c891b-b223-4813-a997-318ae75355a1
+let
+
+	na = 1:ta 
+	p = plot()
+	plot!(p, sqrt.(log(ta)./(na .+ 1e-5)), xlabel="action count", ylabel="potential")
+	hline!(p, [log(ta)], label="log t")
+end
+
+# ╔═╡ d8899170-07d9-49fd-9d03-3c9ceaca3a9d
+
+
 # ╔═╡ 6eaf46db-dd07-4a47-96b1-6a07c632a79a
 @bind pa Slider(0.:0.01:1., show_value=true, default=0.1)
 
@@ -200,6 +215,9 @@ function getindex(collection, idx, default)
 	end
 end
 
+# ╔═╡ 8cee4777-f9b7-4584-a498-3e08903ca9a3
+md"Notice how greedy strategy often gets stuck on with local optima and never explores further"
+
 # ╔═╡ cf6cb7ee-84d8-48fa-9573-07dfacee5962
 md"Show plot"
 
@@ -232,6 +250,12 @@ md"Show optimistic initial Q"
 
 # ╔═╡ 4b672fe5-fb95-4d00-b8d0-1621b8d62ec9
 md"## Upper confidence bound"
+
+# ╔═╡ 14791977-1866-46f1-8ff8-6a107559f822
+md"The plot below shows the action 'potential' as function of action count for different timestep"
+
+# ╔═╡ 871dfe49-59b5-40d5-9067-b41374bb949a
+md"t"
 
 # ╔═╡ f4bbe00c-b033-415c-9c8e-e877270adc8f
 md"Action probability"
@@ -390,7 +414,7 @@ function ucb_trial(q, T=1000; ε=0., q_init=0., walk_std=0., c=2.)
 		
 		potentials = sqrt.(log(t)./(a_counts .+ 1e-5))
 		
-		a = argmax(q_est + potentials)
+		a = argmax(q_est + c * potentials)
 		accumulate_mean!(a_optimal_pct, Int(a == a_optimal))
 		
 		r = get_reward(q, a)
@@ -411,7 +435,7 @@ let
 	if show_ubc
 		upd_ubc
 		
-		N = 100
+		N = 200
 		T = 1000
 		p1, p2 = plot(title="Average reward", legend=:bottomright), plot(title="Optimal action %", legend=:bottomright)
 
@@ -419,7 +443,7 @@ let
 		plot!(p1, mean(average_rewards), lw=2, label="ε = 0.1")
 		plot!(p2, mean(opt_pcts), lw=2, label="ε = 0.1")
 		
-		c = 2.
+		c = 1.
 		opt_pcts, average_rewards = experiment(N, T, ucb_trial; c=c)
 		plot!(p1, mean(average_rewards), lw=2, label="UCB, c=$c")
 		plot!(p2, mean(opt_pcts), lw=2, label="UCB, c=$c")
@@ -607,6 +631,7 @@ end
 # ╠═a26cf864-d5a4-4d9e-91ad-fbfe4e385d87
 # ╠═351277e6-6777-417b-96b8-023b4ef5707d
 # ╠═c08545e2-5218-4489-8975-5c3f86c66345
+# ╟─8cee4777-f9b7-4584-a498-3e08903ca9a3
 # ╠═86e725ba-ff06-4aa4-bd85-0c1b6f30065b
 # ╠═15f1567e-c69a-4ff6-8276-114628be3018
 # ╟─cf6cb7ee-84d8-48fa-9573-07dfacee5962
@@ -637,6 +662,11 @@ end
 # ╟─8a35ab08-a496-4599-bdd9-4f0a03b8bd01
 # ╠═2889dd86-c0fc-4cee-9a2d-6b829cb746e1
 # ╟─4b672fe5-fb95-4d00-b8d0-1621b8d62ec9
+# ╠═14791977-1866-46f1-8ff8-6a107559f822
+# ╟─871dfe49-59b5-40d5-9067-b41374bb949a
+# ╟─462bb53b-a215-4cc7-ab97-a5b8260c423e
+# ╟─638c891b-b223-4813-a997-318ae75355a1
+# ╟─d8899170-07d9-49fd-9d03-3c9ceaca3a9d
 # ╟─f4bbe00c-b033-415c-9c8e-e877270adc8f
 # ╟─6eaf46db-dd07-4a47-96b1-6a07c632a79a
 # ╟─e4012f10-c56a-48e1-adfb-07cfc07c4d87
