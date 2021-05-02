@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.4
+# v0.14.5
 
 using Markdown
 using InteractiveUtils
@@ -19,6 +19,9 @@ begin
     using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, SymPy
 end
 
+# ╔═╡ cc0bd675-2f1d-4963-b5d6-6899f542c2d5
+md"Define variables for SymPy"
+
 # ╔═╡ 786fdaa3-db0e-408c-b1cb-d839735f7e38
 s11,s12,s13,s14,s15,s21,s22,s23,s24,s25,s31,s32,s33,s34,s35,s41,s42,s43,s44,s45,s51,s52,s53,s54,s55=symbols("s11,s12,s13,s14,s15,s21,s22,s23,s24,s25,s31,s32,s33,s34,s35,s41,s42,s43,s44,s45,s51,s52,s53,s54,s55")
 
@@ -30,6 +33,9 @@ let
 	end
 	vars
 end
+
+# ╔═╡ 1f867b35-90f6-40ac-ba80-750d3bd927e1
+md"To avoid typing all equtions manually we can generate those. Hopefully this also allows to avoid typos"
 
 # ╔═╡ d00cf809-6f0c-4057-b2ac-ad2c81eba6ae
 begin
@@ -82,6 +88,9 @@ begin
 	res = solve(equations, [s11,s12,s13,s14,s15,s21,s22,s23,s24,s25,s31,s32,s33,s34,s35,s41,s42,s43,s44,s45,s51,s52,s53,s54,s55])
 end
 
+# ╔═╡ 040aafc7-ef88-494a-9df4-cc5c5155a793
+md"Visualising the result as heatmap makes it more readable:"
+
 # ╔═╡ 326c9837-5770-4da0-afda-9f9950b56563
 function make_anno(M::Matrix; labels=nothing, c=:green)
 	m,n = size(M)
@@ -108,10 +117,13 @@ begin
 end
 
 # ╔═╡ Cell order:
-# ╠═c3b6bce8-ab7e-11eb-292e-3bb1464bfad2
+# ╟─c3b6bce8-ab7e-11eb-292e-3bb1464bfad2
+# ╟─cc0bd675-2f1d-4963-b5d6-6899f542c2d5
 # ╠═786fdaa3-db0e-408c-b1cb-d839735f7e38
-# ╠═78c1efb9-823d-4103-b3df-cba410804543
+# ╟─78c1efb9-823d-4103-b3df-cba410804543
+# ╟─1f867b35-90f6-40ac-ba80-750d3bd927e1
 # ╠═d00cf809-6f0c-4057-b2ac-ad2c81eba6ae
 # ╠═7da62397-7f49-4109-82a9-470c37fb31ae
+# ╟─040aafc7-ef88-494a-9df4-cc5c5155a793
 # ╠═52eaab79-825d-487c-beb3-a647710037ee
 # ╟─326c9837-5770-4da0-afda-9f9950b56563
