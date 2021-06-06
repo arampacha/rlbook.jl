@@ -166,7 +166,7 @@ end
 create_agent().state
 
 # ╔═╡ ced93e92-0ca0-4359-b038-6feb08258dda
-md"# Value estimation"
+md"# Value function estimation"
 
 # ╔═╡ 30278c80-38ea-4ee1-9ff8-7b924020dd87
 function simple_policy(state::Tuple)
@@ -388,10 +388,10 @@ Show 3D plot $(@bind show_3d_2 CheckBox())
 # ╔═╡ b2a4e78d-d1d2-401d-a318-5a198fe8d9db
 let
 	if show_3d_2
-	plotly()
-	V = maximum(Q, dims=4)
-	id = Int(ana2 == "With ace")+1
-	plot(1:10, 11:21, V[8:end, :, id], st=:surface)
+		plotly()
+		V = maximum(Q, dims=4)
+		id = Int(ana2 == "With ace")+1
+		plot(1:10, 11:21, V[8:end, :, id], st=:surface)
 	end
 end
 
@@ -410,7 +410,7 @@ md"To be continued..."
 # ╟─546812ec-ea48-423a-8d32-d61083decc44
 # ╟─f86c7c26-a34a-4de2-9626-f7e37a7cabbf
 # ╠═7ccbae20-160b-45be-814c-ef96b85fc40a
-# ╠═00504589-f2bd-4496-bd03-740cd5a1c7a1
+# ╟─00504589-f2bd-4496-bd03-740cd5a1c7a1
 # ╠═6c9a108b-5ac0-43c8-84bf-2459c9674587
 # ╠═fa715a39-d413-4c89-b243-90f28e5b1d80
 # ╠═4b5de8db-13fc-4f0f-a585-ce2b2de912f2
@@ -439,5 +439,5 @@ md"To be continued..."
 # ╠═f923eae6-9d21-4313-86f3-0047dba919f9
 # ╟─8d316cc9-f389-4ec9-96cb-0bd217e18760
 # ╟─f967644d-66f4-46bd-8c91-0ade8a233413
-# ╟─b2a4e78d-d1d2-401d-a318-5a198fe8d9db
+# ╠═b2a4e78d-d1d2-401d-a318-5a198fe8d9db
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
