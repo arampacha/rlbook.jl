@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.4
+# v0.14.5
 
 using Markdown
 using InteractiveUtils
@@ -165,12 +165,6 @@ end
 
 # ╔═╡ 601b3875-45de-470e-a3f1-a9c1c56ecf4d
 up
-
-# ╔═╡ 687dbaf2-cd43-4dc5-861d-6d0962dfb921
-md"### Exact solution"
-
-# ╔═╡ 075a6137-9a52-4c06-a863-dce8fae98359
-
 
 # ╔═╡ a48e130f-2876-44cc-bfdd-746251836b55
 struct GreedyPolicy <: AbstractPolicy
@@ -376,11 +370,53 @@ begin
 	end
 end
 
-# ╔═╡ 7b2fe3d6-6004-4cc2-b2d5-8a73f1ee1038
-
+# ╔═╡ a419de6a-fa5c-439e-ac64-ed576e0da6be
+md"## utils"
 
 # ╔═╡ 9e3394fe-3a55-4a5a-9f09-b9083541c6b7
+mutable struct Position
+	x::Integer
+	y::Integer
+end
 
+# ╔═╡ ffb8607f-8b56-4549-ac1a-c5e90ede5912
+begin
+	function Base.:+(a::Position, b::Position)
+		return Position(a.x+b.x, a.y+b.y)
+	end
+	function Base.:-(a::Position, b::Position)
+		return Position(a.x-b.x, a.y-b.y)
+	end
+	function to_tuple(c::Position)
+		return c.x, c.y
+	end
+end
+
+# ╔═╡ 7b2fe3d6-6004-4cc2-b2d5-8a73f1ee1038
+function make_border_states(s1::Position, s2::Position)
+	dx, dy = to_tuple(s1 - s2)
+	@assert sum(abs.([dx,dy])) == 1 "Cannot set border between non-neighboring positions"
+	
+	if     (dx == 0) & (dy ==-1)
+		return (s1.x,s1.y,down), (s2.x,s2.y,up) 
+	elseif (dx == 0) & (dy == 1)
+		return (s1.x,s1.y,up), (s2.x,s2.y,down)
+	elseif (dx ==-1) & (dy == 0)
+		return (s1.x,s1.y,righ), (s2.x,s2.y,left)
+	elseif (dx == 1) & (dy == 0)
+		return (s1.x,s1.y,left), (s2.x,s2.y,right)
+	else
+		throw("something strange happened")
+	end
+end
+
+# ╔═╡ 58d9da0f-45b5-4873-8c11-3a7e999e5b4e
+let
+	make_border_states(Position(1,1), Position(1,2))
+end
+
+# ╔═╡ 3ea4a4cc-12e1-4a83-8c2b-c87721e715d4
+Position(1,1) + Position(1,2), Position(1,1) - Position(2,2)
 
 # ╔═╡ Cell order:
 # ╠═f2cc03f2-aab2-11eb-2cc1-b77ff8eaf5b3
@@ -401,8 +437,6 @@ end
 # ╠═601b3875-45de-470e-a3f1-a9c1c56ecf4d
 # ╠═fe96ce8c-26f8-432e-abee-9917a3c417a2
 # ╠═85ab20ca-cea0-4487-a817-5447313f28d4
-# ╟─687dbaf2-cd43-4dc5-861d-6d0962dfb921
-# ╠═075a6137-9a52-4c06-a863-dce8fae98359
 # ╠═a48e130f-2876-44cc-bfdd-746251836b55
 # ╟─84de4363-ee9a-4dc2-9650-5f21d427f454
 # ╠═5132b64c-3ef1-45d6-9c43-f64a2efa4fb0
@@ -426,4 +460,8 @@ end
 # ╟─06f2a1e3-38d6-4f59-bbd9-17dea644d088
 # ╠═b93b1dd5-0d09-4c2b-a26d-c414a065073f
 # ╠═7b2fe3d6-6004-4cc2-b2d5-8a73f1ee1038
+# ╠═58d9da0f-45b5-4873-8c11-3a7e999e5b4e
+# ╟─a419de6a-fa5c-439e-ac64-ed576e0da6be
 # ╠═9e3394fe-3a55-4a5a-9f09-b9083541c6b7
+# ╠═ffb8607f-8b56-4549-ac1a-c5e90ede5912
+# ╠═3ea4a4cc-12e1-4a83-8c2b-c87721e715d4
