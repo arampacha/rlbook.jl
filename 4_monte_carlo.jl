@@ -390,7 +390,7 @@ let
 end
 
 # ╔═╡ 51f042b7-f45c-48a3-b2d1-7530e6fcb35a
-md"## MC Control without explorin starts"
+md"## MC Control without exploring starts"
 
 # ╔═╡ 5232d559-dd4c-4340-92a1-621cc7bafbb4
 md"### ε-soft policies"
@@ -427,13 +427,13 @@ function evaluate_policy(π; max_iter=100, every_visit=false)
 	history = []
 	for i = 1:max_iter
 		history = episode(create_agent(), env, π)
-		visited_states = map(x -> (x.s, x.a), history)
+		visited_states = map(x -> x.s, history)
 		G = 0
 		T = length(history)
 		for i = T:-1:1
 			s, a, r = history[i]
 			G = γ*G + r
-			if every_visit || !((s,a) in visited_states[1:i-1])
+			if every_visit || !(s in visited_states[1:i-1])
 				idx = state2idx(s)
 				try
 					Nv[idx...] += 1
@@ -562,9 +562,12 @@ function off_policy_evaluation(max_iter=100, weighted=true)
 		T = length(history)
 		for i = T:-1:1
 			s, a, r = history[i]
-			G = γ*G + r
-			
 			idx = (state2idx(s)..., Int(a))
+			G = γ*G + r
+			# W *= π[idx...] / b[idx...]
+			# if W == 0
+			# 	break
+			# end
 			# Q-values update
 			C[idx...] += W
 			Nv[idx...] += 1
@@ -583,7 +586,7 @@ function off_policy_evaluation(max_iter=100, weighted=true)
 end
 
 # ╔═╡ 8ef62951-72c7-4456-b709-be5e5a50ecef
-Q_op, _, _ = off_policy_evaluation(100_000);
+Q_op, _, _ = off_policy_evaluation(100_000, true);
 
 # ╔═╡ 14f59c06-196a-4f9a-81c6-41790df98724
 let
@@ -614,6 +617,73 @@ function example_54(weighted=true)
 		agent.state = (13, 2, true)
 		
 		history = episode(agent, env, b; first_action=hit)
+		G = 0
+		W = 1
+		T = length(history)
+		for i = T:-1:1
+			s, a, r = history[i]
+			idx = (state2idx(s)..., Int(a))
+			G = γ*G + r
+			# W *= π[idx...] / b[idx...]
+			# if W == 0
+			# 	break
+			# end
+			# Q-values update
+			C[idx...] += W
+			Nv[idx...] += 1
+			if weighted
+				Q[idx...] += (G - Q[idx...]) * W/C[idx...]
+			else
+				Q[idx...] += (W*G - Q[idx...]) / Nv[idx...]
+			end
+			W *= π[idx...] / b[idx...]
+			if W == 0
+				break
+			end
+		end
+		push!(estimates, Q[idx...])
+	end
+	estimates
+end
+
+# ╔═╡ 4d4d0510-2006-4fda-a297-e5082a8ab831
+md"N runs $(@bind n_54 NumberField(10:10:100, default=10))"
+
+# ╔═╡ 9e85cd41-6c86-4c9d-bc4c-849d4e3a9d9b
+let
+	gr()
+	p = plot(xscale=:log)
+	
+	res_w = mean([(example_54() .+ 0.27726).^2 for _ = 1:n_54]) 
+	plot!(p, res_w, label="weighted", colour=:red, ylim=(0,5))
+	
+	res_o = mean([(example_54(false) .+ 0.27726).^2 for _ = 1:n_54]) 
+	plot!(p, res_o, label="ordinary", colour=:green, ylim=(0,5))
+end
+
+# ╔═╡ 4f6e4243-e2b7-4b45-b416-1f2f73f0b79b
+function example_54_alt(weighted=true)
+	# evaluete naive policy
+	π = zeros(21-3,10,2,2)
+	π[1:21-5, :, :, 2] .+= 1.
+	π[21-4:21-3, :, :, 1] .+= 1.
+	@assert all(sum(π, dims=4) .== 1) "Policy should be given as valid action probability distribution"
+	# behaviour policy (random)
+	b = zeros(21-3, 10, 2, 2) .+ 0.5
+	
+	env = Blackjack()
+	γ = 1
+	Q  = zeros(21-3, 10, 2, 2)
+	C  = zeros(size(Q))
+	Nv = zeros(size(Q))
+	estimates = []
+	idx = (state2idx((13, 2, true))..., 2)
+	for i = 1:10_000
+		agent = create_agent()
+		agent.state = (13, 2, true)
+		
+		history = episode(agent, env, b; first_action=hit)
+		
 		_, _, r = history[end]
 		G = r
 		W = π[idx...] / b[idx...]
@@ -630,29 +700,17 @@ function example_54(weighted=true)
 	estimates
 end
 
-# ╔═╡ 9e85cd41-6c86-4c9d-bc4c-849d4e3a9d9b
+# ╔═╡ d6480595-7985-4a7e-b0a5-8da8d4e8582c
 let
 	gr()
 	p = plot(xscale=:log)
 	
-	res_w = mean([(example_54() .+ 0.27726).^2 for _ = 1:100]) 
-	plot!(p, res_w, label="weighted", colour=:red)
+	res_w = mean([(example_54_alt() .+ 0.27726).^2 for _ = 1:n_54]) 
+	plot!(p, res_w, label="weighted", colour=:red, ylim=(0,5))
 	
-	res_o = mean([(example_54(false) .+ 0.27726).^2 for _ = 1:100]) 
-	plot!(p, res_o, label="ordinary", colour=:green)
+	res_o = mean([(example_54_alt(false) .+ 0.27726).^2 for _ = 1:n_54]) 
+	plot!(p, res_o, label="ordinary", colour=:green, ylim=(0,5))
 end
-
-# ╔═╡ 6dff459e-7abe-434a-9109-8c14f8dfdc81
-# let
-# 	gr()
-# 	p = plot(xscale=:log)
-	
-# 	res_w = (mean([example_54() for _ = 1:100])  .+ 0.27726).^2
-# 	plot!(p, res_w, label="weighted", colour=:red)
-	
-# 	res_o =  (mean([example_54(false) for _ = 1:100])  .+ 0.27726).^2
-# 	plot!(p, res_o, label="ordinary", colour=:green)
-# end
 
 # ╔═╡ 5bfd01a2-5add-49b0-a7e7-7f7d1d5244e7
 md"### Off-policy MC control"
@@ -728,23 +786,22 @@ end
 md"Looks like even more episodes needed to converge"
 
 # ╔═╡ 70bb38e8-ee11-4659-a3f5-ac6625676540
-md"#### Ex. 5.5"
+md"#### Example 5.5. Infinite variance"
 
 # ╔═╡ b2274f85-a4c7-497c-89b0-e79c0a59bc91
 begin
 	struct Ex55 <: AbstractEnv
 		p::Float64
 		Ex55() = new(0.1)
-
-		function (env::Ex55)(s, a)
-			if a == 1
-				return 0,2
-			elseif a == 2
-				if rand() < env.p
-					return 1,2
-				else
-					return 0,1
-				end
+	end
+	function (env::Ex55)(s, a)
+		if a == 1
+			return 0,2
+		elseif a == 2
+			if rand() < env.p
+				return 1,2
+			else
+				return 0,1
 			end
 		end
 	end
@@ -767,24 +824,18 @@ end
 # ╔═╡ 1dbaf1bf-06a8-4340-ad7a-2258b021f9e3
 ex55_episode()
 
-# ╔═╡ 4557dc4a-8d2f-49ef-93ed-c52ee5a3970d
-let
-	a = zeros(1,2)
-	a[1,2] = 1.
-	a
-end
-
 # ╔═╡ 8b339152-5572-4102-9675-eaead4f4e282
-function ex55(max_iter=1000, every_visit=false)
+function ex55(max_iter=100, every_visit=false, weighted=false)
 	# evaluete naive policy
 	π = zeros(1,2)
 	π[1,2] = 1.
 	env = Ex55()
 	γ = 1
-	Q  = zeros(1, 2)
-	Nv = zeros(size(Q))
+	V  = 0
+	C  = 0
+	Nv = 0
 	estimates = []
-	Ws = []
+	
 	for i = 1:max_iter
 		# behaviour policy (random)
 		b = zeros(1, 2) .+ 0.5
@@ -797,88 +848,50 @@ function ex55(max_iter=1000, every_visit=false)
 			s, a, r = history[i]
 			idx = (s,a)
 			G = γ*G + r
-			
-			
-			# if W==0
+			# W *= π[idx...] / b[idx...]
+			# if W == 0
 			# 	break
 			# end
-			
-			
+			Nv += 1
+			C  += W
 			if every_visit || !(s in visited_states[1:i-1])
-				# W *= π[idx...] / b[idx...]
-				# if W==0
-				# 	break
-				# end
-				# Q-values update
-				Nv[idx...] += 1
-				Q[idx...] += (G*W - Q[idx...]) / Nv[idx...]
-				# return W, Q[idx...], Nv[idx...]
+				# values update
+				if weighted
+					V += (G - V) * W/ C
+				else
+					V += (W*G - V) / Nv
+				end
 			end
-			# return a, π[idx...], b[idx...]
 			W *= π[idx...] / b[idx...]
 			if W == 0
 				break
 			end
-			
-			
 		end
-		push!(estimates, Q[1,2])
+		push!(estimates, V)
 	end
-	Q, π, Nv
 	estimates
 end
 
-# ╔═╡ 0f5aee9e-b070-4132-b26d-7446fccd9cd9
-ex55()
-
-# ╔═╡ 7175fb27-9bc9-451c-b46c-f7c1f6d59243
-h = ex55_episode()
-
-# ╔═╡ f0318384-68c7-4c2f-a17d-3472832ad779
-let  
-	Q = zeros(1,2)
-	Nv = zeros(1,2)
-	ret = nothing
-	visited_states = map(x -> x.s, h)
-	
-	G = 0.
-	W = 1.
-	T = length(h)
-	for i = T:-1:1
-		s, a, r = h[i]
-		idx = (s,a)
-		G = G + r
-		ret = (s,a,r)
-		if false || !(s in visited_states[1:i-1])
-			# W *= π[idx...] / b[idx...]
-# 			# if W==0
-# 			# 	break
-# 			# end
-# 			# Q-values update
-			Nv[idx...] += 1
-			Q[idx...] += (G*W - Q[idx...]) / Nv[idx...]
-# 			# return W, Q[idx...], Nv[idx...]
-		end
-# 		# return a, π[idx...], b[idx...]
-# 		W *= π[idx...] / b[idx...]
-# 		if W == 0
-# 			break
-# 		end
-
-	
-	end
-	Q, Nv
-# 	push!(estimates, Q[1,2])
-end
+# ╔═╡ 4672a45a-2646-4a87-aa92-ff37ab471484
+md"""
+Number of runs $(@bind n_runs_55 NumberField(5:5:20))
+Every visit $(@bind ev_55 CheckBox())
+Weighted IS $(@bind wis_55 CheckBox())
+"""
 
 # ╔═╡ 8718cbdb-d6a8-4e2b-a1a1-67216ddaae86
 let
-	res = [ex55(10_000) for _ = 1:5]
+	n_runs_55 = clamp(n_runs_55, 1, 20)
+	res = [ex55(1_000_000, ev_55, wis_55) for _ = 1:n_runs_55]
 	res
-	# plot(res[1], label=:none, ylim=[-1, 10], xscale=:log)
+	gr()
+	plot(res, label=:none, ylim=[0, 3], xscale=:log)
 end
 
-# ╔═╡ 10bcbbf3-2c1b-4c1d-87a0-251b4b9ca430
+# ╔═╡ 1368ee8d-2625-4760-91b1-ab09cc78355d
+md"## Racetrack"
+
+# ╔═╡ c12d1570-e5b3-4a34-b5f6-fe180fd047f2
 
 
 # ╔═╡ b35c60b8-c952-4a7e-bff3-1d296ba25ba3
@@ -951,8 +964,10 @@ TableOfContents()
 # ╠═8ef62951-72c7-4456-b709-be5e5a50ecef
 # ╟─14f59c06-196a-4f9a-81c6-41790df98724
 # ╠═1749beee-a955-4b0e-9152-e5076300ace3
+# ╟─4d4d0510-2006-4fda-a297-e5082a8ab831
 # ╠═9e85cd41-6c86-4c9d-bc4c-849d4e3a9d9b
-# ╟─6dff459e-7abe-434a-9109-8c14f8dfdc81
+# ╠═4f6e4243-e2b7-4b45-b416-1f2f73f0b79b
+# ╠═d6480595-7985-4a7e-b0a5-8da8d4e8582c
 # ╟─5bfd01a2-5add-49b0-a7e7-7f7d1d5244e7
 # ╟─2390d0cf-6cad-4059-953f-e6b04479ca87
 # ╟─3e408223-5ca2-4b46-8ff2-44419d9f71a7
@@ -964,12 +979,10 @@ TableOfContents()
 # ╠═b2274f85-a4c7-497c-89b0-e79c0a59bc91
 # ╠═38fec5ca-5ce9-48e3-a044-07174ea2288b
 # ╠═1dbaf1bf-06a8-4340-ad7a-2258b021f9e3
-# ╠═4557dc4a-8d2f-49ef-93ed-c52ee5a3970d
 # ╠═8b339152-5572-4102-9675-eaead4f4e282
-# ╠═0f5aee9e-b070-4132-b26d-7446fccd9cd9
-# ╠═7175fb27-9bc9-451c-b46c-f7c1f6d59243
-# ╠═f0318384-68c7-4c2f-a17d-3472832ad779
+# ╟─4672a45a-2646-4a87-aa92-ff37ab471484
 # ╠═8718cbdb-d6a8-4e2b-a1a1-67216ddaae86
-# ╠═10bcbbf3-2c1b-4c1d-87a0-251b4b9ca430
+# ╟─1368ee8d-2625-4760-91b1-ab09cc78355d
+# ╠═c12d1570-e5b3-4a34-b5f6-fe180fd047f2
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 # ╠═b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
