@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.7
+# v0.14.8
 
 using Markdown
 using InteractiveUtils
@@ -181,7 +181,7 @@ end
 create_agent().state
 
 # ╔═╡ ced93e92-0ca0-4359-b038-6feb08258dda
-md"# Value function estimation"
+md"## Value function estimation"
 
 # ╔═╡ 6a31eaa3-9309-4b31-ac57-0e3204ff8bfa
 md"First we will apply Monte Carlo policy evaluation to simple deterministic policy defined below:"
@@ -211,17 +211,16 @@ function episode(agent::BlackjackAgent, env::Blackjack, π::Function)
 	history
 end
 
+# ╔═╡ fe2df29d-3296-4eec-aee9-5d91b086d73b
+md"""
+Number of episodes $(@bind n_episodes_eval Select(["10000", "100000","500000", "1000000"]))
+
+Every visit $(@bind ev_eval CheckBox())
+"""
+
 # ╔═╡ e0f41a91-2cfc-432d-b977-e4f8e73047de
 md"""
 Show 3D plot $(@bind show_3d_1 CheckBox())
-"""
-
-# ╔═╡ 92ad6a93-4426-4fa5-9535-6e3ca4b68564
-@bind ana Select(["No ace", "With ace"])
-
-# ╔═╡ 365da46c-97d2-4214-bc76-61248683a74f
-md"""
-Show 500000 episodes $(@bind long_run CheckBox())
 """
 
 # ╔═╡ f4472d2e-bcaf-4736-b3e4-9c862acdcb89
@@ -232,8 +231,15 @@ function show_v(V::Array; legend=:none)
 	plot(left, right, xlabel="Dealer card")
 end
 
+# ╔═╡ 67053afd-1686-406b-acf1-790bdfa28374
+function show_v3d(V::Array)
+	left  = plot(1:10, 12:21, V[9:end, :, 1], st=:surface, title="No Ace", legend=:none)
+	right = plot(1:10, 12:21, V[9:end, :, 2], st=:surface, title="With Ace", legend=:none)
+	plot(left, right, layout=(1,2))
+end
+
 # ╔═╡ dcd5c9db-6663-4cc9-bdbd-b107131e763a
-md"# Action values estimation"
+md"## Action values estimation"
 
 # ╔═╡ b70bcf37-2b1e-4621-a378-d9ab72de50c4
 md"""
@@ -288,6 +294,9 @@ md"""
 To find optimal policy we apply the idea of generalized policy iteration to the Monte Carlo methods. After each episode the action values are updated and greedy policy is selected.
 """
 
+# ╔═╡ 40d598a9-3e7d-4929-ba1f-82fd594255aa
+md"### Exploring starts"
+
 # ╔═╡ 614e7c44-1173-4dda-854b-c6915a453249
 function mces(max_iter=100)
 	# π = zeros(21-3, 10, 2, 2) .+ 0.5
@@ -303,13 +312,13 @@ function mces(max_iter=100)
 	for i = 1:max_iter
 		agent = create_agent()
 		history = episode_es(agent, env, π)
-		visited_states = map(x -> x.s, history)
+		visited_states = map(x -> (x.s, x.a), history)
 		G = 0
 		T = length(history)
 		for i = T:-1:1
 			s, a, r = history[i]
-			G += γ*r
-			if !(s in visited_states[1:i-1])
+			G = γ*G + r
+			if !((s, a) in visited_states[1:i-1])
 				idx = (state2idx(s)..., Int(a))
 				# Q-values update
 				try
@@ -371,31 +380,34 @@ md"""
 Show 3D plot $(@bind show_3d_2 CheckBox())
 """
 
-# ╔═╡ f967644d-66f4-46bd-8c91-0ade8a233413
-@bind ana2 Select(["No ace", "With ace"])
-
 # ╔═╡ b2a4e78d-d1d2-401d-a318-5a198fe8d9db
 let
 	if show_3d_2
 		plotly()
 		V = maximum(Q, dims=4)
-		id = Int(ana2 == "With ace")+1
-		plot(1:10, 11:21, V[8:end, :, id], st=:surface)
+		show_v3d(V)
 	end
 end
 
 # ╔═╡ 51f042b7-f45c-48a3-b2d1-7530e6fcb35a
 md"## MC Control without explorin starts"
 
+# ╔═╡ 5232d559-dd4c-4340-92a1-621cc7bafbb4
+md"### ε-soft policies"
+
 # ╔═╡ 9dc66787-41c8-4369-9665-4afa17906d68
-function episode(agent::BlackjackAgent, env::Blackjack, π::Array)
+function episode(agent::BlackjackAgent, env::Blackjack, π::Array; first_action=nothing)
 	history = []
 	finished = false
 	state = agent.state
 	i = 0
 	while !(finished) && (i < 100)
 		i += 1
-		action = BlackjackAction(sample(1:2, ProbabilityWeights(π[state2idx(state)..., :])))
+		if i > 1 || first_action == nothing
+			action = BlackjackAction(sample(1:2, ProbabilityWeights(π[state2idx(state)..., :])))
+		else
+			action = first_action
+		end
 		reward, new_state, finished = env(state, action)
 		push!(history, (s=state, a=action, r=reward))
 		state = new_state
@@ -407,7 +419,7 @@ end
 episode(create_agent(), Blackjack(), simple_policy)
 
 # ╔═╡ 234840e5-a678-40ec-b37f-a35f9412fff2
-function evaluate_policy(π; max_iter=100)
+function evaluate_policy(π; max_iter=100, every_visit=false)
 	env = Blackjack()
 	γ = 1
 	V = zeros(21-3, 10, 2)
@@ -415,13 +427,13 @@ function evaluate_policy(π; max_iter=100)
 	history = []
 	for i = 1:max_iter
 		history = episode(create_agent(), env, π)
-		visited_states = map(x -> x.s, history)
+		visited_states = map(x -> (x.s, x.a), history)
 		G = 0
 		T = length(history)
 		for i = T:-1:1
 			s, a, r = history[i]
-			G += γ*r
-			if !(s in visited_states[1:i-1])
+			G = γ*G + r
+			if every_visit || !((s,a) in visited_states[1:i-1])
 				idx = state2idx(s)
 				try
 					Nv[idx...] += 1
@@ -436,7 +448,7 @@ function evaluate_policy(π; max_iter=100)
 end
 
 # ╔═╡ 2efbed6f-a676-4e02-ab10-127ce9b45ae0
-V = evaluate_policy(simple_policy, max_iter=10_000);
+V = evaluate_policy(simple_policy, max_iter=parse(Int, n_episodes_eval), every_visit=ev_eval);
 
 # ╔═╡ fd00aa9a-d22a-4471-873d-c5deccacf50d
 let 
@@ -448,17 +460,7 @@ end
 let
 	if show_3d_1
 		plotly()
-		id = Int(ana == "With ace")+1
-		plot(1:10, 12:21, V[9:end, :, id], st=:surface)
-	end
-end
-
-# ╔═╡ e0ee067b-901a-44d7-904c-4857643fb8ab
-let 
-	if long_run
-		V = evaluate_policy(simple_policy, max_iter=500_000)
-		gr()
-		show_v(V)
+		show_v3d(V)
 	end
 end
 
@@ -482,14 +484,14 @@ function mc_eps(max_iter=100)
 	history = []
 	for i = 1:max_iter
 		agent = create_agent()
-		history = episode_es(agent, env, π)
-		visited_states = map(x -> x.s, history)
+		history = episode(agent, env, π)
+		visited_states = map(x -> (x.s, x.a), history)
 		G = 0
 		T = length(history)
 		for i = T:-1:1
 			s, a, r = history[i]
-			G += γ*r
-			if !(s in visited_states[1:i-1])
+			G = γ*G + r
+			if !((s,a) in visited_states[1:i-1])
 				idx = (state2idx(s)..., Int(a))
 				# Q-values update
 				try
@@ -534,10 +536,356 @@ let
 end
 
 # ╔═╡ 0a824970-9201-4e42-a26e-5534847aaf2a
-md"## Off-policy predictions via Importance Sampling"
+md"### Off-policy predictions via Importance Sampling"
+
+# ╔═╡ 5879427c-a30b-47df-8744-68b615547c0e
+function off_policy_evaluation(max_iter=100, weighted=true)
+	# evaluete naive policy
+	π = zeros(21-3,10,2,2)
+	π[1:21-5, :, :, 2] .+= 1.
+	π[21-4:21-3, :, :, 1] .+= 1.
+	@assert all(sum(π, dims=4) .== 1) "Policy should be given as valid action probability distribution"
+	env = Blackjack()
+	γ = 1
+	Q  = zeros(21-3, 10, 2, 2)
+	C  = zeros(size(Q))
+	Nv = zeros(size(Q))
+	history = []
+	for i = 1:max_iter
+		agent = create_agent()
+		# behaviour policy (random)
+		b = zeros(21-3, 10, 2, 2) .+ 0.5
+		history = episode(agent, env, b)
+		visited_states = map(x -> (x.s, x.a), history)
+		G = 0
+		W = 1
+		T = length(history)
+		for i = T:-1:1
+			s, a, r = history[i]
+			G = γ*G + r
+			
+			idx = (state2idx(s)..., Int(a))
+			# Q-values update
+			C[idx...] += W
+			Nv[idx...] += 1
+			if weighted
+				Q[idx...] += (G - Q[idx...])*W/C[idx...]
+			else
+				Q[idx...] += (W*G - Q[idx...]) / Nv[idx...]
+			end
+			W *= π[idx...] / b[idx...]
+			if W == 0
+				break
+			end
+		end
+	end
+	Q, π, C
+end
+
+# ╔═╡ 8ef62951-72c7-4456-b709-be5e5a50ecef
+Q_op, _, _ = off_policy_evaluation(100_000);
+
+# ╔═╡ 14f59c06-196a-4f9a-81c6-41790df98724
+let
+	V = maximum(Q_op, dims=4)
+	plotly()
+	show_v3d(V)
+end
+
+# ╔═╡ 1749beee-a955-4b0e-9152-e5076300ace3
+function example_54(weighted=true)
+	# evaluete naive policy
+	π = zeros(21-3,10,2,2)
+	π[1:21-5, :, :, 2] .+= 1.
+	π[21-4:21-3, :, :, 1] .+= 1.
+	@assert all(sum(π, dims=4) .== 1) "Policy should be given as valid action probability distribution"
+	# behaviour policy (random)
+	b = zeros(21-3, 10, 2, 2) .+ 0.5
+	
+	env = Blackjack()
+	γ = 1
+	Q  = zeros(21-3, 10, 2, 2)
+	C  = zeros(size(Q))
+	Nv = zeros(size(Q))
+	estimates = []
+	idx = (state2idx((13, 2, true))..., 2)
+	for i = 1:10_000
+		agent = create_agent()
+		agent.state = (13, 2, true)
+		
+		history = episode(agent, env, b; first_action=hit)
+		_, _, r = history[end]
+		G = r
+		W = π[idx...] / b[idx...]
+		C[idx...] += W
+		Nv[idx...] += 1
+		# Q-values update
+		if weighted
+			Q[idx...] += (G - Q[idx...]) *W/C[idx...]
+		else
+			Q[idx...] += (W*G - Q[idx...]) / Nv[idx...]
+		end
+		push!(estimates, Q[idx...])
+	end
+	estimates
+end
+
+# ╔═╡ 9e85cd41-6c86-4c9d-bc4c-849d4e3a9d9b
+let
+	gr()
+	p = plot(xscale=:log)
+	
+	res_w = mean([(example_54() .+ 0.27726).^2 for _ = 1:100]) 
+	plot!(p, res_w, label="weighted", colour=:red)
+	
+	res_o = mean([(example_54(false) .+ 0.27726).^2 for _ = 1:100]) 
+	plot!(p, res_o, label="ordinary", colour=:green)
+end
+
+# ╔═╡ 6dff459e-7abe-434a-9109-8c14f8dfdc81
+# let
+# 	gr()
+# 	p = plot(xscale=:log)
+	
+# 	res_w = (mean([example_54() for _ = 1:100])  .+ 0.27726).^2
+# 	plot!(p, res_w, label="weighted", colour=:red)
+	
+# 	res_o =  (mean([example_54(false) for _ = 1:100])  .+ 0.27726).^2
+# 	plot!(p, res_o, label="ordinary", colour=:green)
+# end
+
+# ╔═╡ 5bfd01a2-5add-49b0-a7e7-7f7d1d5244e7
+md"### Off-policy MC control"
+
+# ╔═╡ 2390d0cf-6cad-4059-953f-e6b04479ca87
+function off_policy_control(max_iter=100)
+	# evaluete naive policy
+	π = zeros(21-3,10,2,2)
+	π[1:21-5, :, :, 2] .+= 1.
+	π[21-4:21-3, :, :, 1] .+= 1.
+	
+	@assert all(sum(π, dims=4) .== 1) "Policy should be given as valid action probability distribution"
+	env = Blackjack()
+	γ = 1
+	Q  = zeros(21-3, 10, 2, 2)
+	C  = zeros(size(Q))
+	history = []
+	for i = 1:max_iter
+		agent = create_agent()
+		# behaviour policy (random)
+		b = zeros(21-3, 10, 2, 2) .+ 0.5
+		history = episode(agent, env, b)
+		visited_states = map(x -> x.s, history)
+		G = 0
+		W = 1
+		T = length(history)
+		for i = T:-1:1
+			s, a, r = history[i]
+			G = γ*G + r
+			
+			idx = (state2idx(s)..., Int(a))
+			# Q-values update
+			C[idx...] += W
+			Q[idx...] += (G - Q[idx...])*W/C[idx...]
+			# policy update
+			pidx = idx[1:3]
+			a_star = argmax(Q[pidx..., :])
+			π[pidx..., :] .= 0.
+			π[pidx..., a_star] += 1.
+			@assert all(sum(π, dims=4) .== 1)
+			if π[idx...] == 0.
+				break
+			end
+			W *= 1 / b[idx...]
+		end
+	end
+	Q, π, C
+end
+
+# ╔═╡ 3e408223-5ca2-4b46-8ff2-44419d9f71a7
+md"""
+Number of episodes $(@bind n_episodes_mc_opc Select(["10000", "100000","500000", "1000000"]))
+"""
+
+# ╔═╡ 0ec098ea-50df-4d87-b273-fe96deab9b2d
+Q_opc, π_opc, c_opc = off_policy_control(parse(Int, n_episodes_mc_opc));
+
+# ╔═╡ 1de87fc2-b4bf-41f6-b58b-58e2082b1e2e
+@bind to_show3 Select(["value", "policy"])
+
+# ╔═╡ e0ef7ba3-e5bd-40bc-be8d-7b52c0eefcfe
+let
+	V = maximum(Q_opc, dims=4)
+	gr()	
+	if to_show3 == "value"
+		show_v(V)
+	elseif to_show3 == "policy"
+		show_actions(π_opc)
+	end
+end
+
+# ╔═╡ 43c0d6f2-2de6-4be7-bd17-b6b7b7491ae0
+md"Looks like even more episodes needed to converge"
+
+# ╔═╡ 70bb38e8-ee11-4659-a3f5-ac6625676540
+md"#### Ex. 5.5"
+
+# ╔═╡ b2274f85-a4c7-497c-89b0-e79c0a59bc91
+begin
+	struct Ex55 <: AbstractEnv
+		p::Float64
+		Ex55() = new(0.1)
+
+		function (env::Ex55)(s, a)
+			if a == 1
+				return 0,2
+			elseif a == 2
+				if rand() < env.p
+					return 1,2
+				else
+					return 0,1
+				end
+			end
+		end
+	end
+end
+
+# ╔═╡ 38fec5ca-5ce9-48e3-a044-07174ea2288b
+function ex55_episode()
+	s = 1
+	env = Ex55()
+	history = []
+	while s == 1
+		a = Int(rand() > 0.5) + 1
+		r, new_s = env(s, a)
+		push!(history, (s=s, a=a, r=r))
+		s = new_s
+	end
+	history
+end
+
+# ╔═╡ 1dbaf1bf-06a8-4340-ad7a-2258b021f9e3
+ex55_episode()
+
+# ╔═╡ 4557dc4a-8d2f-49ef-93ed-c52ee5a3970d
+let
+	a = zeros(1,2)
+	a[1,2] = 1.
+	a
+end
+
+# ╔═╡ 8b339152-5572-4102-9675-eaead4f4e282
+function ex55(max_iter=1000, every_visit=false)
+	# evaluete naive policy
+	π = zeros(1,2)
+	π[1,2] = 1.
+	env = Ex55()
+	γ = 1
+	Q  = zeros(1, 2)
+	Nv = zeros(size(Q))
+	estimates = []
+	Ws = []
+	for i = 1:max_iter
+		# behaviour policy (random)
+		b = zeros(1, 2) .+ 0.5
+		history = ex55_episode()
+		visited_states = map(x -> x.s, history)
+		G = 0.
+		W = 1.
+		T = length(history)
+		for i = T:-1:1
+			s, a, r = history[i]
+			idx = (s,a)
+			G = γ*G + r
+			
+			
+			# if W==0
+			# 	break
+			# end
+			
+			
+			if every_visit || !(s in visited_states[1:i-1])
+				# W *= π[idx...] / b[idx...]
+				# if W==0
+				# 	break
+				# end
+				# Q-values update
+				Nv[idx...] += 1
+				Q[idx...] += (G*W - Q[idx...]) / Nv[idx...]
+				# return W, Q[idx...], Nv[idx...]
+			end
+			# return a, π[idx...], b[idx...]
+			W *= π[idx...] / b[idx...]
+			if W == 0
+				break
+			end
+			
+			
+		end
+		push!(estimates, Q[1,2])
+	end
+	Q, π, Nv
+	estimates
+end
+
+# ╔═╡ 0f5aee9e-b070-4132-b26d-7446fccd9cd9
+ex55()
+
+# ╔═╡ 7175fb27-9bc9-451c-b46c-f7c1f6d59243
+h = ex55_episode()
+
+# ╔═╡ f0318384-68c7-4c2f-a17d-3472832ad779
+let  
+	Q = zeros(1,2)
+	Nv = zeros(1,2)
+	ret = nothing
+	visited_states = map(x -> x.s, h)
+	
+	G = 0.
+	W = 1.
+	T = length(h)
+	for i = T:-1:1
+		s, a, r = h[i]
+		idx = (s,a)
+		G = G + r
+		ret = (s,a,r)
+		if false || !(s in visited_states[1:i-1])
+			# W *= π[idx...] / b[idx...]
+# 			# if W==0
+# 			# 	break
+# 			# end
+# 			# Q-values update
+			Nv[idx...] += 1
+			Q[idx...] += (G*W - Q[idx...]) / Nv[idx...]
+# 			# return W, Q[idx...], Nv[idx...]
+		end
+# 		# return a, π[idx...], b[idx...]
+# 		W *= π[idx...] / b[idx...]
+# 		if W == 0
+# 			break
+# 		end
+
+	
+	end
+	Q, Nv
+# 	push!(estimates, Q[1,2])
+end
+
+# ╔═╡ 8718cbdb-d6a8-4e2b-a1a1-67216ddaae86
+let
+	res = [ex55(10_000) for _ = 1:5]
+	res
+	# plot(res[1], label=:none, ylim=[-1, 10], xscale=:log)
+end
+
+# ╔═╡ 10bcbbf3-2c1b-4c1d-87a0-251b4b9ca430
+
 
 # ╔═╡ b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 md"To be continued..."
+
+# ╔═╡ b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
+TableOfContents()
 
 # ╔═╡ Cell order:
 # ╟─2ac84074-c6ac-11eb-3a87-2b08d5ffa4fc
@@ -563,40 +911,65 @@ md"To be continued..."
 # ╟─ced93e92-0ca0-4359-b038-6feb08258dda
 # ╟─6a31eaa3-9309-4b31-ac57-0e3204ff8bfa
 # ╠═30278c80-38ea-4ee1-9ff8-7b924020dd87
-# ╠═3bbe3335-68c5-4efe-9800-e9505b8a63b9
+# ╟─3bbe3335-68c5-4efe-9800-e9505b8a63b9
 # ╠═a2ed8727-152f-45c2-8b7e-087bab8639ce
 # ╠═234840e5-a678-40ec-b37f-a35f9412fff2
+# ╟─fe2df29d-3296-4eec-aee9-5d91b086d73b
 # ╠═2efbed6f-a676-4e02-ab10-127ce9b45ae0
-# ╠═fd00aa9a-d22a-4471-873d-c5deccacf50d
+# ╟─fd00aa9a-d22a-4471-873d-c5deccacf50d
 # ╟─e0f41a91-2cfc-432d-b977-e4f8e73047de
-# ╟─92ad6a93-4426-4fa5-9535-6e3ca4b68564
 # ╟─9f3a3b21-7040-47dc-84cc-b4cf04b6a674
-# ╟─365da46c-97d2-4214-bc76-61248683a74f
-# ╟─e0ee067b-901a-44d7-904c-4857643fb8ab
 # ╟─f4472d2e-bcaf-4736-b3e4-9c862acdcb89
+# ╟─67053afd-1686-406b-acf1-790bdfa28374
 # ╟─dcd5c9db-6663-4cc9-bdbd-b107131e763a
 # ╟─b70bcf37-2b1e-4621-a378-d9ab72de50c4
 # ╟─d78418eb-07fe-4f9b-a073-c79cccb0bbb9
 # ╠═b972b736-e97d-496b-9913-466dc9ee4664
 # ╟─89aa9ab7-7afc-4569-9f71-9881f1666bf3
 # ╟─f08c8021-11e1-4443-8e86-0f2a664cecf1
+# ╟─40d598a9-3e7d-4929-ba1f-82fd594255aa
 # ╠═614e7c44-1173-4dda-854b-c6915a453249
 # ╟─ca28c10a-1495-4704-b521-e11653e5848a
 # ╟─e239eae0-4468-4860-80cd-855dc546878f
 # ╠═6636140b-cbb1-4a05-b724-50ed1188efe5
 # ╟─4ee8e017-3c54-438e-94aa-03722a8cb28b
 # ╠═f923eae6-9d21-4313-86f3-0047dba919f9
-# ╠═6867a8a6-ea82-40c3-84c1-d37bdea8c79c
+# ╟─6867a8a6-ea82-40c3-84c1-d37bdea8c79c
 # ╟─8d316cc9-f389-4ec9-96cb-0bd217e18760
-# ╟─f967644d-66f4-46bd-8c91-0ade8a233413
 # ╟─b2a4e78d-d1d2-401d-a318-5a198fe8d9db
 # ╟─51f042b7-f45c-48a3-b2d1-7530e6fcb35a
-# ╟─9dc66787-41c8-4369-9665-4afa17906d68
+# ╟─5232d559-dd4c-4340-92a1-621cc7bafbb4
+# ╠═9dc66787-41c8-4369-9665-4afa17906d68
 # ╟─5bbbce00-22dc-4241-a1d6-fbebd4152bf9
 # ╠═25d9d69b-c0bb-4456-bf1e-fbd78e0c4992
 # ╟─21012628-f419-4cd9-a074-47e68559c4b1
 # ╠═adde6b40-fd5c-4e73-82bf-8853c48d5a2c
 # ╟─c490ac19-58eb-4151-a0c6-dc46e6e8bc93
-# ╟─30cb932a-80a3-4716-9cae-024441551ce9
+# ╠═30cb932a-80a3-4716-9cae-024441551ce9
 # ╟─0a824970-9201-4e42-a26e-5534847aaf2a
+# ╠═5879427c-a30b-47df-8744-68b615547c0e
+# ╠═8ef62951-72c7-4456-b709-be5e5a50ecef
+# ╟─14f59c06-196a-4f9a-81c6-41790df98724
+# ╠═1749beee-a955-4b0e-9152-e5076300ace3
+# ╠═9e85cd41-6c86-4c9d-bc4c-849d4e3a9d9b
+# ╟─6dff459e-7abe-434a-9109-8c14f8dfdc81
+# ╟─5bfd01a2-5add-49b0-a7e7-7f7d1d5244e7
+# ╟─2390d0cf-6cad-4059-953f-e6b04479ca87
+# ╟─3e408223-5ca2-4b46-8ff2-44419d9f71a7
+# ╠═0ec098ea-50df-4d87-b273-fe96deab9b2d
+# ╟─1de87fc2-b4bf-41f6-b58b-58e2082b1e2e
+# ╠═e0ef7ba3-e5bd-40bc-be8d-7b52c0eefcfe
+# ╟─43c0d6f2-2de6-4be7-bd17-b6b7b7491ae0
+# ╟─70bb38e8-ee11-4659-a3f5-ac6625676540
+# ╠═b2274f85-a4c7-497c-89b0-e79c0a59bc91
+# ╠═38fec5ca-5ce9-48e3-a044-07174ea2288b
+# ╠═1dbaf1bf-06a8-4340-ad7a-2258b021f9e3
+# ╠═4557dc4a-8d2f-49ef-93ed-c52ee5a3970d
+# ╠═8b339152-5572-4102-9675-eaead4f4e282
+# ╠═0f5aee9e-b070-4132-b26d-7446fccd9cd9
+# ╠═7175fb27-9bc9-451c-b46c-f7c1f6d59243
+# ╠═f0318384-68c7-4c2f-a17d-3472832ad779
+# ╠═8718cbdb-d6a8-4e2b-a1a1-67216ddaae86
+# ╠═10bcbbf3-2c1b-4c1d-87a0-251b4b9ca430
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
+# ╠═b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
