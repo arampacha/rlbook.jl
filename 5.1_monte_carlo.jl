@@ -888,12 +888,6 @@ let
 	plot(res, label=:none, ylim=[0, 3], xscale=:log)
 end
 
-# ╔═╡ 1368ee8d-2625-4760-91b1-ab09cc78355d
-md"## Racetrack"
-
-# ╔═╡ c12d1570-e5b3-4a34-b5f6-fe180fd047f2
-
-
 # ╔═╡ b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 md"To be continued..."
 
@@ -901,8 +895,8 @@ md"To be continued..."
 TableOfContents()
 
 # ╔═╡ Cell order:
-# ╟─2ac84074-c6ac-11eb-3a87-2b08d5ffa4fc
-# ╟─7fbbaff3-c5f7-46d5-aa9d-2cb0f1fddc50
+# ╠═2ac84074-c6ac-11eb-3a87-2b08d5ffa4fc
+# ╠═7fbbaff3-c5f7-46d5-aa9d-2cb0f1fddc50
 # ╟─893783fe-a5d7-4c5e-ba6d-764e9967a60f
 # ╟─8bcc1011-6a64-4e33-b24f-8c26c690fa91
 # ╟─788836c3-f7a9-47a1-804e-2ea0127e7b02
@@ -982,7 +976,5 @@ TableOfContents()
 # ╠═8b339152-5572-4102-9675-eaead4f4e282
 # ╟─4672a45a-2646-4a87-aa92-ff37ab471484
 # ╠═8718cbdb-d6a8-4e2b-a1a1-67216ddaae86
-# ╟─1368ee8d-2625-4760-91b1-ab09cc78355d
-# ╠═c12d1570-e5b3-4a34-b5f6-fe180fd047f2
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 # ╠═b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
