@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.14.8
+# v0.15.1
 
 using Markdown
 using InteractiveUtils
@@ -39,11 +39,11 @@ end
 md"# Chapter 6. Temporal-Difference Learning"
 
 # ╔═╡ 788836c3-f7a9-47a1-804e-2ea0127e7b02
-md"## Random Walk example"
+md"## Intro: Random Walk example"
 
 # ╔═╡ db31c17f-37bd-4a5c-8ea0-aafa76919f46
 md"""
-![random_walk.jpg](6_rw.jpg)
+![random_walk.jpg](https://raw.githubusercontent.com/arampacha/rlbook.jl/main/images/6_rw.svg)
 """
 
 # ╔═╡ 1a1023ec-9e7e-4015-acb0-04fefc9852e3
@@ -208,51 +208,84 @@ let
 	rp
 end
 
+# ╔═╡ f8e93801-c271-47b8-a46b-f3a2eb7fe51e
+md"## TD Control"
+
 # ╔═╡ 5a5b2f79-f3ad-4cb2-998f-a21a16836127
-md"## SARSA"
+md"""
+### Sarsa
+
+Sarsa is on-policy learning algorithm
+"""
+
+# ╔═╡ 9deae8d7-e96b-44bc-9bbd-d58d6fc7b0d1
+md"""
+##### Sarsa algorithm for estimating Q ≈ q*
+
+>**Algorithm parameters:** step size $α ∈ (0, 1]$, small $ε > 0$\
+>Initialize $Q(s, a)$, for all $s ∈ \mathcal{S}^+$, $a \in \mathcal{A}(s)$, arbitrarily except that $Q(terminal , ·) = 0$\
+>Loop for each episode:\
+>$\quad$Initialize $S$\
+>$\quad$Choose $A$ from $S$ using policy derived from $Q$ (e.g., >ε-greedy)\
+>$\quad$Loop for each step of episode:\
+>$\quad \quad$Take action A, observe R, S 0\
+>$\quad \quad$Choose $A_0$ from $S_0$ using policy derived from $Q$ (e.g., ε-greedy)\
+>$\quad \quad$$Q(S,A) ← Q(S,A) + α [R + γQ(S', A') - Q(S, A)]$\
+>$\quad \quad$$S ← S', A ← A'$\
+>$\quad$until $S$ is terminal
+"""
 
 # ╔═╡ 934e4b2e-cbb1-4d20-9b52-a433a0456bee
 @enum GridworldAction left=1 right=2 up=3 down=4
 
+# ╔═╡ 5cf46ff6-0323-444f-a402-160f90da6c9a
+action_map = Dict([
+		(left,  ( 0,-1)),
+		(right, ( 0, 1)),
+		(up,    ( 1, 0)),
+		(down,  (-1, 0))
+		])
+
 # ╔═╡ cb5acea5-e28f-40d8-bfe1-6a8410f2978e
 begin
 	struct WindyGridworld <: AbstractEnv
-		m::Int64
-		n::Int64
-		special_states::Dict
+		height::Int64
+		width::Int64
+		wind::Vector
+		terminal_states::Set
 	end
-	function (world::WindyGridworld)(a::GridworldAction, state::Tuple)
-		x, y = state
-		m, n = world.m, world.n
-		if haskey(world.special_states, state)
-			return world.special_states[state]
+	function (world::WindyGridworld)(state::Tuple, a::GridworldAction)
+		y, x = state
+		
+		if ((y,x) in world.terminal_states)
+			return 0, (y,x), true
 		end
-		if a == left
-			if y-1 < 1
-				return -1, state
-			else
-				return 0, (x, y-1)
-			end
-		elseif a == right
-			if y+1 > n
-				return -1, state
-			else
-				return 0, (x, y+1)
-			end
-		elseif a == up
-			if x-1 < 1
-				return -1, state
-			else
-				return 0, (x-1, y)
-			end
-		elseif a == down
-			if x+1 > m
-				return -1, state
-			else
-				return 0, (x+1, y)
-			end
-		end
+		
+		m, n = world.height, world.width
+		
+		dy, dx = action_map[a]
+		
+		x, y = clamp(x+dx, 1, n), clamp(y+dy+world.wind[x], 1, m)
+		
+		return -1, (y,x), ((y,x) in world.terminal_states)
+		
 	end
+end
+
+# ╔═╡ 9b9b2dd3-3811-4ef4-9c42-85d0e93d4da2
+let
+	env = WindyGridworld(7, 10, zeros(Int64, 10), Set([(4,8)]))
+	i = 0
+	s = (4,1)
+	finished=false
+	history = []
+	while !(finished) & (i< 100)
+		i +=1
+		r, s, finished = env(s, rand([right,left]))
+		push!(history, s)
+	end
+	finished
+	history
 end
 
 # ╔═╡ 6c9a108b-5ac0-43c8-84bf-2459c9674587
@@ -271,10 +304,7 @@ end
 
 # ╔═╡ f4472d2e-bcaf-4736-b3e4-9c862acdcb89
 function show_v(V::Array; legend=:none)
-	left = heatmap(V[9:end,:,1], title="No usable ace", ylabel="Player sum", legend=:none, yticks=(1:10, 12:21))
-	
-	right= heatmap(V[9:end,:,2], title="Usable ace", legend=legend, yticks=:none)
-	plot(left, right, xlabel="Dealer card")
+	heatmap(V, title="Value", legend=:none, yticks=:none, xticks=:none)
 end
 
 # ╔═╡ 67053afd-1686-406b-acf1-790bdfa28374
@@ -282,17 +312,6 @@ function show_v3d(V::Array)
 	left  = plot(1:10, 12:21, V[9:end, :, 1], st=:surface, title="No Ace", legend=:none)
 	right = plot(1:10, 12:21, V[9:end, :, 2], st=:surface, title="With Ace", legend=:none)
 	plot(left, right, layout=(1,2))
-end
-
-# ╔═╡ 6867a8a6-ea82-40c3-84c1-d37bdea8c79c
-function show_actions(π::Array)
-	no_ace_act = (π[8:end, :, 1, 1] .> .5)
-	left = heatmap(no_ace_act, legend=:none, title="No Ace", yticks=(1:11, 11:21), ylabel="Player sum", xlabel="Dealer card")
-	annotate!([(8,1,text("hit", :white, :left)), (8,11, text("stick", :black, :left))])
-	ace_act = (π[8:end, :, 2, 1] .> .5)
-	right = heatmap(ace_act, legend=:none, title="With Ace", yticks=(1:11, 11:21), xlabel="Dealer card")
-	annotate!([(8,1,text("hit", :white, :left)), (8,11, text("stick", :black, :left))])
-	plot(left, right)
 end
 
 # ╔═╡ 2390d0cf-6cad-4059-953f-e6b04479ca87
@@ -340,8 +359,482 @@ function off_policy_control(max_iter=100)
 	Q, π, C
 end
 
-# ╔═╡ 70bb38e8-ee11-4659-a3f5-ac6625676540
-md"#### Example 5.5. Infinite variance"
+# ╔═╡ 7e30e439-41f1-4041-bd3b-8e4fe9d63d7f
+sa2idx(s, a) = (s..., Int(a))
+
+# ╔═╡ fd53d80a-d48f-43cc-a12d-451d59f44de0
+sa2idx((1,1), left)
+
+# ╔═╡ c7518919-a1f1-4fd0-9349-3c90aa5b1227
+begin
+	function onehot(i, n)
+		res = zeros(n)
+		res[i] = 1.
+		return res
+	end
+end
+
+# ╔═╡ a8da32bd-a670-4a34-9256-a347a326be09
+function sarsa(env::AbstractEnv, actions, n_iter::Int64=100, α::Float64=0.5, ε::Float64=0.1, γ=1.; start=nothing)
+	max_steps = 1000
+	m,n = env.height, env.width
+	na = length(instances(actions))
+	Q = zeros(m, n, na)
+	π = similar(Q)
+	# starting with random policy
+	π .= 1. /na
+	steps_per_episode = []
+	episodes = []
+	@assert all(sum(π, dims=3) .== 1.)
+	for i = 1:n_iter
+		s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+		a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+		finished = false
+		j = 1
+		while !(finished) && (j < max_steps)
+			push!(episodes, i)
+			j += 1
+			r, s′, finished = env(s, a)
+			a′ = actions(sample(1:na, ProbabilityWeights(π[s′..., :])))
+			Q′ = (finished ? 0 : Q[sa2idx(s′, a′)...])
+			Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+			
+			#ε-greedy policy based on Q
+			π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+						  ε .* ones(na) ./ na)
+			
+			s, a = s′, a′
+		end
+		push!(steps_per_episode, j)
+	end
+	Q, π, episodes
+end
+
+# ╔═╡ ae892e0b-6c9d-40b1-85b7-bc80715fa340
+function sarsa_step!(
+		Q::Array, 
+		π::Array, 
+		env::AbstractEnv,
+		actions::DataType;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	m, n = env.height, env.width
+	na = length(instances(actions))
+	
+	s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+	a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+	
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		j += 1
+		r, s′, finished = env(s, a)
+		total_reward += r
+		a′ = actions(sample(1:na, ProbabilityWeights(π[s′..., :])))
+		Q′ = (finished ? 0 : Q[sa2idx(s′, a′)...])
+		Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+
+		#ε-greedy policy based on Q
+		π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+					  ε .* ones(na) ./ na)
+		
+		s, a = s′, a′
+	end
+	
+	h = (n=j, r = total_reward)
+	return Q, π, h
+end
+
+# ╔═╡ ca57335d-1e44-476c-9c27-df8d252fea71
+function run_policy(π, env, start)
+	s = start
+	path = [s, ]
+	actions = []
+	finished = false
+	i = 0
+	while (! finished) && (i<100)
+		a = GridworldAction(argmax(π[s..., :]))
+		r, s, finished = env(s, a)
+		push!(path, s)
+		push!(actions, a)
+		i += 1
+	end
+	path, actions
+end
+
+# ╔═╡ ed4c917d-bd8f-40c1-b421-2f4daf9835f8
+md"### Q-learning"
+
+# ╔═╡ 958ae35d-b2a2-45e3-b478-2f9fffb52a6d
+begin
+	struct Cliff <: AbstractEnv
+		height::Int64
+		width::Int64
+		special_states::Dict
+		terminal_states::Set
+	end
+	function (world::Cliff)(state::Tuple, a::GridworldAction)
+		y, x = state
+		
+		if ((y,x) in world.terminal_states)
+			return 0, (y,x), true
+		end
+		
+		m, n = world.height, world.width
+		
+		dy, dx = action_map[a]
+		
+		x = clamp(x+dx, 1, n)
+		y = clamp(y+dy, 1, m)
+		if (y,x) in keys(world.special_states)
+			return world.special_states[(y,x)]
+		end
+		return -1, (y,x), ((y,x) in world.terminal_states)
+		
+	end
+end
+
+# ╔═╡ 9206164f-a71a-4878-a3e8-38a889f309f2
+let
+	special_states = Dict(
+		[((1,x), (-100, (1,1), false)) for x = 2:11]
+	)
+	env = Cliff(4,12,special_states, Set([(1,12)]))
+	s = (1,1)
+	env(s, up), env(s, right)
+end
+
+# ╔═╡ b31c6091-0018-40ff-98c2-be16b59a2583
+function q_learning(env::AbstractEnv, actions, n_iter::Int64=100, α::Float64=0.5, ε::Float64=0.1, γ=1.; start=nothing)
+	max_steps = 1000
+	m,n = env.height, env.width
+	na = length(instances(actions))
+	Q = zeros(m, n, na)
+	π = similar(Q)
+	# starting with random policy
+	π .= 1. /na
+	@assert all(sum(π, dims=3) .== 1.)
+	
+	steps_per_episode = []
+	episodes = []
+	for i = 1:n_iter
+		s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+		finished = false
+		j = 1
+		while !(finished) && (j < max_steps)
+			push!(episodes, i)
+			j += 1
+			a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+			r, s′, finished = env(s, a)
+			
+			Q′ = (finished ? 0 : maximum(Q[s′..., :]))
+			Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+			
+			#ε-greedy policy based on Q
+			π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+						  ε .* ones(na) ./ na)
+			
+			s = s′
+		end
+		push!(steps_per_episode, j)
+	end
+	Q, π, episodes
+end
+
+# ╔═╡ 59ea89fb-c80a-4472-b592-fb0e076c042e
+function ql_step!(
+		Q::Array, 
+		π::Array, 
+		env::AbstractEnv,
+		actions::DataType;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	m, n = env.height, env.width
+	na = length(instances(actions))
+	s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+	a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+	
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		j += 1
+		a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+		r, s′, finished = env(s, a)
+		total_reward += r
+		
+		Q′ = (finished ? 0 : maximum(Q[s′..., :]))
+		Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+		
+		#ε-greedy policy based on Q
+		π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+					  ε .* ones(na) ./ na)
+		
+		s = s′
+	end
+	
+	h = (n=j, r = total_reward)
+	return Q, π, h
+end
+
+# ╔═╡ abf8614d-be09-41a8-93b5-3a118274d8b3
+md"### Expected Sarsa"
+
+# ╔═╡ cd65cbbf-3b75-4cfc-a1f6-af1a566b3ef6
+
+
+# ╔═╡ e185420b-c6b6-45c4-8e5f-7c21455a400f
+md"### Double Q-learning"
+
+# ╔═╡ de52a277-75aa-4558-a7b4-843a501c12b5
+md"#### Maximization bias"
+
+# ╔═╡ e810049e-2b75-48a6-8bf1-e98432e84e68
+begin
+	struct Env67 <: AbstractEnv
+	end
+	function (world::Env67)(state::String, a::Int64)
+		
+		if state == "A"
+			if a == 1
+				return 0, "B", false
+			else
+				return 0, "T", true
+			end
+		end
+		
+		if state == "B"
+			r = randn() - 0.1
+			return r, "T", true
+		end
+	end
+	
+	
+end
+
+# ╔═╡ d4603152-17d9-414e-852d-9a7b09b01d46
+let 
+	env = Env67()
+	env("B", 2)
+end
+
+# ╔═╡ 429845a8-81a8-40d7-b032-f1abbb8b8c36
+function ql_step!(
+		Q::Dict, 
+		π::Dict, 
+		env::AbstractEnv;
+		# actions::Dict;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	n = length(keys(Q))
+	s = "A"
+	a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+	fa = a
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		if j > 1
+			a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+		end
+		r, s′, finished = env(s, a)
+		total_reward += r
+		
+		Q′ = (finished ? 0 : maximum(Q[s′]))
+		Q[s][a] += α * (r + γ*Q′ - Q[s][a])
+
+		#ε-greedy policy based on Q
+		na = length(Q[s])
+		π[s] = ((1-ε)*onehot(argmax(Q[s]), na) +
+				ε .* ones(na) ./ na)
+		
+		s = s′
+		j += 1
+	end
+	
+	h = (n=j, r = total_reward, a=fa)
+	return Q, π, h
+end
+
+# ╔═╡ aca031f4-23d5-443b-9f8f-16d641bda22a
+let
+	special_states = Dict(
+		[((1,x), (-100, (1,1), false)) for x = 2:11]
+	)
+	env = Cliff(4,12,special_states, Set([(1,12)]))
+	
+	n_iter = 500
+	
+	m,n = env.height, env.width
+	na = length(instances(GridworldAction))
+	
+	# SARSA
+	Q = zeros(m, n, na)
+	π = similar(Q)
+	# starting with random policy
+	π .= 1. /na
+	@assert all(sum(π, dims=3) .== 1.)
+	
+	steps_per_episode = []
+	rewards = []
+	for i = 1:n_iter
+		Q, π, h = sarsa_step!(Q, π, env, GridworldAction; start=(1,1))
+		push!(steps_per_episode, h.n)
+		push!(rewards, h.r)
+	end
+	
+	mean_rewards_sarsa = [mean(rewards[1:i]) for i = 1:length(rewards)]
+	p = plot(rewards, legend=:none, ylabel="episode", xlabel="timestep", ylim=[-100,0], colour=:blue, linestyle=:dash, alpha=0.4)
+	plot!(p, mean_rewards_sarsa, legend=:none, colour=:blue, linewidth=2)
+	
+	
+	# Q-learning
+	Q = zeros(m, n, na)
+	π = similar(Q)
+	# starting with random policy
+	π .= 1. /na
+	@assert all(sum(π, dims=3) .== 1.)
+	
+	steps_per_episode = []
+	rewards = []
+	for i = 1:n_iter
+		Q, π, h = ql_step!(Q, π, env, GridworldAction; start=(1,1))
+		push!(steps_per_episode, h.n)
+		push!(rewards, h.r)
+	end
+	
+	mean_rewards_ql = [mean(rewards[1:i]) for i = 1:length(rewards)]
+	plot!(p, rewards, legend=:none, colour=:red, linestyle=:dash, alpha=0.4)
+	plot!(p, mean_rewards_ql, legend=:none, colour=:red, linewidth=2)
+end
+
+# ╔═╡ 2a489290-c4b3-4d09-98b3-c3ba445e41f2
+function dql_step!(
+		Q::Dict, 
+		π::Dict, 
+		env::AbstractEnv;
+		# actions::Dict;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	# create a doubled Q
+	Q = Dict([(k, zeros(2, length(v)) .-0.5) for (k,v) in Q])
+	n = length(keys(Q))
+	s = "A"
+	a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+	fa = a
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		if j > 1
+			a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+		end
+		r, s′, finished = env(s, a)
+		total_reward += r
+		
+		(main, est) = (rand() < 0.5) ? (1,2) : (2,1) 
+		Q′ = (finished ? 0 : maximum(Q[s′][est, :]))
+		Q[s][main, a] += α * (r + γ*Q′ - Q[s][main, a])
+
+		#ε-greedy policy based on Q
+		na = size(Q[s])[end]
+		π[s] = ((1-ε)*onehot(argmax(dropdims(sum(Q[s], dims=1), dims=1)), na) +
+				ε .* ones(na) ./ na)
+		
+		s = s′
+		j += 1
+	end
+	
+	h = (n=j, r = total_reward, a=fa)
+	Q = Dict([(k, dropdims(mean(v, dims=1), dims=1)) for (k,v) = Q]) 
+	return Q, π, h
+end
+
+# ╔═╡ 03b88572-cc28-492e-b644-dc505d0d84b1
+function e67_episode(f, n=300)
+	env = Env67()
+	na = 50
+	Q = Dict([
+		("A", zeros(2)),
+		("B", zeros(na)),
+	])
+	π = Dict([(k, ones(length(v)) ./ length(v)) for (k,v) in Q])
+	steps = Array{Float64}(undef, n)
+	rewards = Array{Float64}(undef, n)
+	first_actions = Array{Float64}(undef, n)
+	for i = 1:n
+		Q, π, h = f(Q, π, env)
+		
+		steps[i] = h.n
+		rewards[i] = h.r
+		first_actions[i] = h.a
+	end
+	
+	return first_actions, rewards
+end
+
+# ╔═╡ 965d23da-47f5-4568-8bc8-6207eaa04c65
+let
+	ap = plot(ylabel="left action %", xlabel="episode", ylim=[0,1])
+	rp = plot(ylabel="average reward", xlabel="episode")
+	N = 1000
+	T = 300
+	actions = zeros(N,T)
+	rewards = zeros(N,T)
+	for i = 1:N
+		actions[i, :], rewards[i, :] = e67_episode(ql_step!, T)
+	end
+	la_ql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+	ap = plot!(ap, la_ql, label="Q-learning")
+	rp = plot!(rp, dropdims(mean(rewards, dims=1), dims=1), label="Q-learning")
+	plot(ap, rp)
+end
+
+# ╔═╡ 49918ad5-1b50-406b-ae28-ee05a6412ca2
+let
+	ap = plot(ylabel="left action %", xlabel="episode", ylim=[0,1])
+	N = 1000
+	T = 300
+	actions = zeros(N,T)
+	rewards = zeros(N,T)
+	for i = 1:N
+		actions[i, :], rewards[i, :] = e67_episode(dql_step!, T)
+	end
+	la_ql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+	ap = plot!(ap, la_ql, label="Double Q-learning")
+	rp = plot(dropdims(mean(rewards, dims=1), dims=1))
+	plot(ap, rp)
+end
+
+# ╔═╡ b8c8478e-8723-4648-add2-450ac141b959
+let
+	a = zeros(5)
+	size(a)[end]
+end
 
 # ╔═╡ b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 md"To be continued..."
@@ -349,15 +842,109 @@ md"To be continued..."
 # ╔═╡ b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
 TableOfContents()
 
+# ╔═╡ 811fe1e4-b950-4317-b78c-24332ae3a855
+function make_anno(M::Matrix; labels=nothing, c=:green)
+	m,n = size(M)
+	xs = repeat(1:n, m)
+	ys = [(i ÷ n)+1 for i=0:m*n-1]
+	if labels == nothing
+		vs = [round(M[i, j], digits=2) for (i, j) = zip(ys, xs)]
+	else
+		vs = [labels[i,j]  for (i, j) = zip(ys, xs)]
+	end
+	
+	(xs, ys, vs, c)
+end
+
+# ╔═╡ fe7bfff1-8620-4a64-aba6-d1e934bb0f18
+begin
+	arrows = ["←", "→", "↑", "↓"]	
+	
+	function get_arrows(Q::Array)
+		m,n,_ = size(Q)
+		actions = [arrows[argmax(Q[i, j, :])] for i=1:m, j=1:n]
+	end
+	
+end
+
+# ╔═╡ 5f27e743-1eb4-43c5-97fb-319ce3304f98
+function annotated_heatmap(Q::Array, show_policy::Bool=false; kwargs...)
+	if show_policy
+		labels = get_arrows(Q)
+	else
+		labels=nothing
+	end
+	m,n,_ = size(Q)
+	V = [maximum(Q[i, j, :]) for i=1:m, j=1:n]
+	anno = make_anno(V, labels=labels)
+	
+	p = plot(title="Value", yticks=:none, xticks=:none)
+	heatmap!(p, V, yflip=false, annotations=anno, kwargs...)
+end
+
+# ╔═╡ 15414fc1-3a3a-4ce8-922e-b506fea7ba3c
+begin
+	m, n = 7,10
+	# wind = zeros(Int64, n)
+	wind = [0,0,0,1,1,1,2,2,1,0]
+	# wind = [0,0,0,0,0,1,1,1,0,0]
+	env = WindyGridworld(m, n, wind, Set([(4,8)]))
+	Q, π, steps = sarsa(env, GridworldAction, 500, start=(4,1))
+	
+	p1 = annotated_heatmap(Q, true)
+	p2 = plot(steps, legend=:none, ylabel="episode", xlabel="timestep")
+	p1 = annotate!(p1, [(1,4, text("▤", :green)), (8,4, text("x", :red))])
+	# learned policy
+	path, actions = run_policy(π, env, (4,1))
+	p1 = plot!(p1, [x[2] for x in path], [x[1] for x in path], linewidth=3, color=:blue, legend=:none, arrow=true)
+	plot(p1,p2, layout=(2,1))
+end
+
+# ╔═╡ 5dfa9376-dd47-488b-8e9a-a941e7b49b6d
+let
+	special_states = Dict(
+		[((1,x), (-100, (1,1), false)) for x = 2:11]
+	)
+	env = Cliff(4,12,special_states, Set([(1,12)]))
+	Q, π, steps = sarsa(env, GridworldAction, 1000, start=(1,1))
+	
+	p1 = annotated_heatmap(Q, true)
+	p2 = plot(steps, legend=:none, ylabel="episode", xlabel="timestep")
+	
+	# learned policy
+	path, actions = run_policy(π, env, (1,1))
+	p1 = plot!(p1, [x[2] for x in path], [x[1] for x in path], linewidth=3, color=:blue, legend=:none, arrow=true)
+	
+	plot(p1,p2, layout=(2,1))
+end
+
+# ╔═╡ 6d8ceca5-93fc-4987-afd2-4c61c79b7f80
+let
+	special_states = Dict(
+		[((1,x), (-100, (1,1), false)) for x = 2:11]
+	)
+	env = Cliff(4,12,special_states, Set([(1,12)]))
+	Q, π, steps = q_learning(env, GridworldAction, 1000, start=(1,1))
+	
+	p1 = annotated_heatmap(Q, true)
+	p2 = plot(steps, legend=:none, ylabel="episode", xlabel="timestep")
+	
+	# learned policy
+	path, actions = run_policy(π, env, (1,1))
+	p1 = plot!(p1, [x[2] for x in path], [x[1] for x in path], linewidth=3, color=:blue, legend=:none, arrow=true)
+	
+	plot(p1,p2, layout=(2,1))
+end
+
 # ╔═╡ Cell order:
 # ╟─2ac84074-c6ac-11eb-3a87-2b08d5ffa4fc
 # ╟─7fbbaff3-c5f7-46d5-aa9d-2cb0f1fddc50
 # ╟─893783fe-a5d7-4c5e-ba6d-764e9967a60f
 # ╟─788836c3-f7a9-47a1-804e-2ea0127e7b02
 # ╟─db31c17f-37bd-4a5c-8ea0-aafa76919f46
-# ╠═1a1023ec-9e7e-4015-acb0-04fefc9852e3
-# ╟─7fa89833-aff3-4fad-8144-f099d54b0e4d
-# ╟─1d382eee-1616-4c45-81aa-6b18a3223a48
+# ╟─1a1023ec-9e7e-4015-acb0-04fefc9852e3
+# ╠═7fa89833-aff3-4fad-8144-f099d54b0e4d
+# ╠═1d382eee-1616-4c45-81aa-6b18a3223a48
 # ╟─c8973041-c9c8-4e8e-bc96-2d9691fef86d
 # ╠═31289e15-e217-496a-b2e8-0b99c0ecc019
 # ╠═5b552b82-9a34-40c3-9853-7305488ae94d
@@ -365,15 +952,47 @@ TableOfContents()
 # ╟─63cccf72-13df-46c4-8513-dcf1f8e25c83
 # ╟─4f2d1b03-8372-4d2a-9ae3-a3aeb4d2c6f3
 # ╟─bd265c0f-1da2-46e8-8f5d-c656686288de
+# ╟─f8e93801-c271-47b8-a46b-f3a2eb7fe51e
 # ╟─5a5b2f79-f3ad-4cb2-998f-a21a16836127
-# ╠═934e4b2e-cbb1-4d20-9b52-a433a0456bee
+# ╟─9deae8d7-e96b-44bc-9bbd-d58d6fc7b0d1
+# ╟─934e4b2e-cbb1-4d20-9b52-a433a0456bee
 # ╠═cb5acea5-e28f-40d8-bfe1-6a8410f2978e
-# ╠═6c9a108b-5ac0-43c8-84bf-2459c9674587
-# ╠═4b5de8db-13fc-4f0f-a585-ce2b2de912f2
+# ╟─5cf46ff6-0323-444f-a402-160f90da6c9a
+# ╟─9b9b2dd3-3811-4ef4-9c42-85d0e93d4da2
+# ╟─6c9a108b-5ac0-43c8-84bf-2459c9674587
+# ╟─4b5de8db-13fc-4f0f-a585-ce2b2de912f2
 # ╟─f4472d2e-bcaf-4736-b3e4-9c862acdcb89
 # ╟─67053afd-1686-406b-acf1-790bdfa28374
-# ╟─6867a8a6-ea82-40c3-84c1-d37bdea8c79c
 # ╟─2390d0cf-6cad-4059-953f-e6b04479ca87
-# ╟─70bb38e8-ee11-4659-a3f5-ac6625676540
+# ╟─7e30e439-41f1-4041-bd3b-8e4fe9d63d7f
+# ╟─fd53d80a-d48f-43cc-a12d-451d59f44de0
+# ╠═a8da32bd-a670-4a34-9256-a347a326be09
+# ╠═ae892e0b-6c9d-40b1-85b7-bc80715fa340
+# ╟─c7518919-a1f1-4fd0-9349-3c90aa5b1227
+# ╠═15414fc1-3a3a-4ce8-922e-b506fea7ba3c
+# ╠═ca57335d-1e44-476c-9c27-df8d252fea71
+# ╟─ed4c917d-bd8f-40c1-b421-2f4daf9835f8
+# ╟─958ae35d-b2a2-45e3-b478-2f9fffb52a6d
+# ╟─9206164f-a71a-4878-a3e8-38a889f309f2
+# ╠═5dfa9376-dd47-488b-8e9a-a941e7b49b6d
+# ╠═b31c6091-0018-40ff-98c2-be16b59a2583
+# ╠═59ea89fb-c80a-4472-b592-fb0e076c042e
+# ╠═aca031f4-23d5-443b-9f8f-16d641bda22a
+# ╠═6d8ceca5-93fc-4987-afd2-4c61c79b7f80
+# ╟─abf8614d-be09-41a8-93b5-3a118274d8b3
+# ╠═cd65cbbf-3b75-4cfc-a1f6-af1a566b3ef6
+# ╟─e185420b-c6b6-45c4-8e5f-7c21455a400f
+# ╟─de52a277-75aa-4558-a7b4-843a501c12b5
+# ╠═e810049e-2b75-48a6-8bf1-e98432e84e68
+# ╠═d4603152-17d9-414e-852d-9a7b09b01d46
+# ╠═429845a8-81a8-40d7-b032-f1abbb8b8c36
+# ╠═2a489290-c4b3-4d09-98b3-c3ba445e41f2
+# ╠═03b88572-cc28-492e-b644-dc505d0d84b1
+# ╠═965d23da-47f5-4568-8bc8-6207eaa04c65
+# ╠═49918ad5-1b50-406b-ae28-ee05a6412ca2
+# ╠═b8c8478e-8723-4648-add2-450ac141b959
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 # ╠═b8af68b9-b2a9-4b0a-aa2b-b14e09243f59
+# ╟─811fe1e4-b950-4317-b78c-24332ae3a855
+# ╟─fe7bfff1-8620-4a64-aba6-d1e934bb0f18
+# ╟─5f27e743-1eb4-43c5-97fb-319ce3304f98
