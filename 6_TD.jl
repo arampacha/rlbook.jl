@@ -39,7 +39,7 @@ end
 md"# Chapter 6. Temporal-Difference Learning"
 
 # ╔═╡ 788836c3-f7a9-47a1-804e-2ea0127e7b02
-md"## Intro: Random Walk example"
+md"## TD Prediction: Random Walk example"
 
 # ╔═╡ db31c17f-37bd-4a5c-8ea0-aafa76919f46
 md"""
@@ -593,14 +593,87 @@ end
 # ╔═╡ abf8614d-be09-41a8-93b5-3a118274d8b3
 md"### Expected Sarsa"
 
-# ╔═╡ cd65cbbf-3b75-4cfc-a1f6-af1a566b3ef6
+# ╔═╡ 095457b7-0b9d-4e34-ac36-08b438f08b17
+function esarsa(env::AbstractEnv, actions, n_iter::Int64=100, α::Float64=0.5, ε::Float64=0.1, γ=1.; start=nothing)
+	max_steps = 1000
+	m,n = env.height, env.width
+	na = length(instances(actions))
+	Q = zeros(m, n, na)
+	π = similar(Q)
+	# starting with random policy
+	π .= 1. /na
+	@assert all(sum(π, dims=3) .== 1.)
+	
+	steps_per_episode = []
+	episodes = []
+	for i = 1:n_iter
+		s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+		finished = false
+		j = 1
+		while !(finished) && (j < max_steps)
+			push!(episodes, i)
+			j += 1
+			a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+			r, s′, finished = env(s, a)
+			
+			Q′ = (finished ? 0 : sum(π[s′..., :] .* (Q[s′..., :])))
+			Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+			
+			#ε-greedy policy based on Q
+			π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+						  ε .* ones(na) ./ na)
+			
+			s = s′
+		end
+		push!(steps_per_episode, j)
+	end
+	Q, π, episodes
+end
 
+# ╔═╡ cd65cbbf-3b75-4cfc-a1f6-af1a566b3ef6
+function esarsa_step!(
+		Q::Array, 
+		π::Array, 
+		env::AbstractEnv,
+		actions::DataType;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	m, n = env.height, env.width
+	na = length(instances(actions))
+	s = (start == nothing) ? (rand(1:m), rand(1:n)) : start
+	a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+	
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		j += 1
+		a = actions(sample(1:na, ProbabilityWeights(π[s..., :])))
+		r, s′, finished = env(s, a)
+		total_reward += r
+		
+		Q′ = (finished ? 0 : sum(π[s′..., :] .* (Q[s′..., :])))
+		Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+		
+		#ε-greedy policy based on Q
+		π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+					  ε .* ones(na) ./ na)
+		
+		s = s′
+	end
+	
+	h = (n=j, r = total_reward)
+	return Q, π, h
+end
 
 # ╔═╡ e185420b-c6b6-45c4-8e5f-7c21455a400f
-md"### Double Q-learning"
-
-# ╔═╡ de52a277-75aa-4558-a7b4-843a501c12b5
-md"#### Maximization bias"
+md"### Maximization bias"
 
 # ╔═╡ e810049e-2b75-48a6-8bf1-e98432e84e68
 begin
@@ -675,6 +748,46 @@ function ql_step!(
 	return Q, π, h
 end
 
+# ╔═╡ a70269b1-b3e1-4114-8a71-330927b38b2f
+function sarsa_step!(
+		Q::Dict, 
+		π::Dict, 
+		env::AbstractEnv;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	n = length(keys(Q))
+	s = "A"
+	a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+	fa = a
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		r, s′, finished = env(s, a)
+		total_reward += r
+		a′ = (finished ? 
+			0 : sample(1:length(π[s′]), ProbabilityWeights(π[s′])))
+		Q′ = (finished ? 0 : Q[s′][a′])
+		Q[s][a] += α * (r + γ*Q′ - Q[s][a])
+
+		#ε-greedy policy based on Q
+		na = length(Q[s])
+		π[s] = ((1-ε)*onehot(argmax(Q[s]), na) +
+				ε .* ones(na) ./ na)
+		
+		s, a = s′, a′
+	end
+	
+	h = (n=j, r = total_reward, a=fa)
+	return Q, π, h
+end
+
 # ╔═╡ aca031f4-23d5-443b-9f8f-16d641bda22a
 let
 	special_states = Dict(
@@ -727,6 +840,50 @@ let
 	plot!(p, mean_rewards_ql, legend=:none, colour=:red, linewidth=2)
 end
 
+# ╔═╡ a37be2bf-f1de-47a5-bb48-1ae580ddf587
+function esarsa_step!(
+		Q::Dict, 
+		π::Dict, 
+		env::AbstractEnv;
+		# actions::Dict;
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	n = length(keys(Q))
+	s = "A"
+	a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+	fa = a
+	finished = false
+	j = 1
+	total_reward = 0
+	
+	while !(finished) && (j < max_steps)
+		if j > 1
+			a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+		end
+		r, s′, finished = env(s, a)
+		total_reward += r
+		
+		Q′ = (finished ? 0 : sum(π[s′] .* (Q[s′])))
+		Q[s][a] += α * (r + γ*Q′ - Q[s][a])
+		
+		#ε-greedy policy based on Q
+		na = length(Q[s])
+		π[s] = ((1-ε)*onehot(argmax(Q[s]), na) +
+				ε .* ones(na) ./ na)
+		
+		s = s′
+		j += 1
+	end
+	
+	h = (n=j, r = total_reward, a=fa)
+	return Q, π, h
+end
+
 # ╔═╡ 2a489290-c4b3-4d09-98b3-c3ba445e41f2
 function dql_step!(
 		Q::Dict, 
@@ -739,8 +896,6 @@ function dql_step!(
 		start=nothing,
 		max_steps=1000
 	)
-	# create a doubled Q
-	Q = Dict([(k, zeros(2, length(v)) .-0.5) for (k,v) in Q])
 	n = length(keys(Q))
 	s = "A"
 	a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
@@ -757,43 +912,65 @@ function dql_step!(
 		total_reward += r
 		
 		(main, est) = (rand() < 0.5) ? (1,2) : (2,1) 
-		Q′ = (finished ? 0 : maximum(Q[s′][est, :]))
-		Q[s][main, a] += α * (r + γ*Q′ - Q[s][main, a])
+		Q′ = (finished ? 0 : maximum(Q[s′][main, :]))
+		Q[s][main, a] += α * (r + γ*Q′ - Q[s][est, a])
+		# if rand() < 0.5
+		# 	Q′ = (finished ? 0 : maximum(Q[s′][1, :]))
+		# 	Q[s][1, a] += α * (r + γ*Q′ - Q[s][2, a])
+		# else
+		# 	Q′ = (finished ? 0 : maximum(Q[s′][2, :]))
+		# 	Q[s][2, a] += α * (r + γ*Q′ - Q[s][1, a])
+		# end
 
 		#ε-greedy policy based on Q
 		na = size(Q[s])[end]
 		π[s] = ((1-ε)*onehot(argmax(dropdims(sum(Q[s], dims=1), dims=1)), na) +
 				ε .* ones(na) ./ na)
-		
+		# v1 = Q[s][1, 1]
+		# if all(Q[s][1, :] .== v1)
+		# 	id = rand(1:size(Q[s])[end])
+		# else
+		# 	id = argmax(Q[s][1, :])
+		# end	
+		# π[s] = ((1-ε)*onehot(id, na) +
+		# 		ε .* ones(na) ./ na)
 		s = s′
 		j += 1
 	end
 	
 	h = (n=j, r = total_reward, a=fa)
-	Q = Dict([(k, dropdims(mean(v, dims=1), dims=1)) for (k,v) = Q]) 
 	return Q, π, h
 end
 
 # ╔═╡ 03b88572-cc28-492e-b644-dc505d0d84b1
-function e67_episode(f, n=300)
+function e67_experiment(f, double=true, n=300; debug=false)
 	env = Env67()
-	na = 50
-	Q = Dict([
-		("A", zeros(2)),
-		("B", zeros(na)),
-	])
-	π = Dict([(k, ones(length(v)) ./ length(v)) for (k,v) in Q])
+	na = 10
+	if double
+		Q = Dict([
+			("A", zeros(2,2)),
+			("B", zeros(2,na)),
+		])
+	else
+		Q = Dict([
+			("A", zeros(2)),
+			("B", zeros(na)),
+		])
+	end
+	π = Dict([(k, ones(size(v)[end]) ./ size(v)[end]) for (k,v) in Q])
 	steps = Array{Float64}(undef, n)
 	rewards = Array{Float64}(undef, n)
 	first_actions = Array{Float64}(undef, n)
 	for i = 1:n
-		Q, π, h = f(Q, π, env)
+		Q, π, h = f(Q, π, env; α=0.1)
 		
 		steps[i] = h.n
 		rewards[i] = h.r
 		first_actions[i] = h.a
 	end
-	
+	if debug
+		return Q, π, rewards
+	end
 	return first_actions, rewards
 end
 
@@ -806,13 +983,71 @@ let
 	actions = zeros(N,T)
 	rewards = zeros(N,T)
 	for i = 1:N
-		actions[i, :], rewards[i, :] = e67_episode(ql_step!, T)
+		actions[i, :], rewards[i, :] = e67_experiment(ql_step!, false, T)
 	end
 	la_ql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
 	ap = plot!(ap, la_ql, label="Q-learning")
 	rp = plot!(rp, dropdims(mean(rewards, dims=1), dims=1), label="Q-learning")
-	plot(ap, rp)
+	
+# 	actions = zeros(N,T)
+# 	d_rewards = zeros(N,T)
+	
+# 	for i = 1:N
+# 		actions[i, :], d_rewards[i, :] = e67_experiment(dql_step!, T)
+# 	end
+# 	la_dql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+# 	ap = plot!(ap, la_dql, label="Double Q-learning")
+# 	rp = plot!(rp, dropdims(mean(d_rewards, dims=1), dims=1), label="Doble Q-learning")
+	
+	ap = hline!(ap, [0.05], linestyle=:dash, alpha=0.5, label=:none)
+	plot(ap, rp, layout=(1,2))
 end
+
+# ╔═╡ 3d8c1ed5-aff8-4bc7-af58-bcd60c190238
+let
+	ap = plot(ylabel="left action %", xlabel="episode", ylim=[0,1])
+	N = 1000
+	T = 300
+	actions = zeros(N,T)
+	rewards = zeros(N,T)
+	
+	for i = 1:N
+		actions[i, :], rewards[i, :] = e67_experiment(sarsa_step!, false, T)
+	end
+	la_dql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+	ap = plot!(ap, la_dql, label="Sarsa")
+	rp = plot(dropdims(mean(rewards, dims=1), dims=1))
+	
+	ap = hline!(ap, [0.05], linestyle=:dash, alpha=0.5, label=:none)
+	plot(ap, rp)
+	
+end
+
+# ╔═╡ eca1fd82-25a1-45db-b8b6-b5db21507792
+let
+	ap = plot(ylabel="left action %", xlabel="episode", ylim=[0,1])
+	N = 1000
+	T = 300
+	actions = zeros(N,T)
+	rewards = zeros(N,T)
+	
+	for i = 1:N
+		actions[i, :], rewards[i, :] = e67_experiment(esarsa_step!, false, T)
+	end
+	la_dql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+	ap = plot!(ap, la_dql, label="Expected Sarsa")
+	rp = plot(dropdims(mean(rewards, dims=1), dims=1))
+	
+	ap = hline!(ap, [0.05], linestyle=:dash, alpha=0.5, label=:none)
+	plot(ap, rp)
+	
+end
+
+# ╔═╡ a3d111f1-999e-4dbc-b586-d12293cf0cb8
+
+
+# ╔═╡ ef138518-d771-4f9a-98ad-7bd3ef673438
+md"### Double Q-Learning"
 
 # ╔═╡ 49918ad5-1b50-406b-ae28-ee05a6412ca2
 let
@@ -821,14 +1056,97 @@ let
 	T = 300
 	actions = zeros(N,T)
 	rewards = zeros(N,T)
+	
 	for i = 1:N
-		actions[i, :], rewards[i, :] = e67_episode(dql_step!, T)
+		actions[i, :], rewards[i, :] = e67_experiment(dql_step!, true, T)
 	end
-	la_ql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
-	ap = plot!(ap, la_ql, label="Double Q-learning")
+	la_dql = dropdims(mean(Int.(actions .== 1), dims=1), dims=1)
+	ap = plot!(ap, la_dql, label="Double Q-learning")
 	rp = plot(dropdims(mean(rewards, dims=1), dims=1))
 	plot(ap, rp)
+	
 end
+
+# ╔═╡ dd96b3c8-8f93-4089-9c05-3212aea07b95
+let
+	q, pi, rs = e67_experiment(dql_step!, true, 20; debug=true)
+	q, rs
+end
+
+# ╔═╡ 03618872-d71a-4256-868b-6504fda1aae9
+function test()
+	na = 10
+	Q = Dict([
+		("A", zeros(2, 2)),
+		("B", zeros(2, na)),
+	])
+	π = Dict([(k, ones(size(v)[end]) ./ size(v)[end]) for (k,v) in Q])
+	env = Env67()
+	α=0.1
+	ε=0.1
+	γ=1.
+	# start=nothing
+	max_steps=1000
+	# create a doubled Q
+	# Q = Dict([(k, zeros(2, length(v)) .+ 1.) for (k,v) in Q])
+	n = length(keys(Q))
+	
+	hs = []
+	for i = 1:1000
+		s = "A"
+		a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+		fa = a
+		finished = false
+		j = 1
+		total_reward = 0
+		while !(finished) && (j < max_steps)
+			if j > 1
+				a = sample(1:length(π[s]), ProbabilityWeights(π[s]))
+			end
+			r, s′, finished = env(s, a)
+			total_reward += r
+
+			(main, est) = (rand() < 0.5) ? (1,2) : (2,1) 
+			Q′ = (finished ? 0 : maximum(Q[s′][main, :]))
+			try 
+				Q[s][main, a] += α * (r + γ*Q′ - Q[s][est, a])
+			catch
+				return j, a, s
+			end
+			# if rand() < 0.5
+			# 	Q′ = (finished ? 0 : maximum(Q[s′][1, :]))
+			# 	Q[s][1, a] += α * (r + γ*Q′ - Q[s][2, a])
+			# else
+			# 	Q′ = (finished ? 0 : maximum(Q[s′][2, :]))
+			# 	Q[s][2, a] += α * (r + γ*Q′ - Q[s][1, a])
+			# end
+
+			#ε-greedy policy based on Q
+			na = size(Q[s])[end]
+			π[s] = ((1-ε)*onehot(argmax(dropdims(sum(Q[s], dims=1), dims=1)), na) +
+					ε .* ones(na) ./ na)
+			# v1 = Q[s][1, 1]
+			# if all(Q[s][1, :] .== v1)
+			# 	id = rand(1:size(Q[s])[end])
+			# else
+			# 	id = argmax(Q[s][1, :])
+			# end	
+			# π[s] = ((1-ε)*onehot(id, na) +
+			# 		ε .* ones(na) ./ na)
+			s = s′
+			j += 1
+		end
+
+		h = (n=j, r = total_reward, a=fa)
+		push!(hs,h)
+	end
+	# Q = Dict([(k, dropdims(mean(v, dims=1), dims=1)) for (k,v) = Q])
+	# Q = Dict([(k, v[1, :]) for (k,v) = Q])
+	Q, π, hs
+end
+
+# ╔═╡ 2ccc1982-b869-4fdb-87fd-85165e8afd75
+test()
 
 # ╔═╡ b8c8478e-8723-4648-add2-450ac141b959
 let
@@ -936,13 +1254,31 @@ let
 	plot(p1,p2, layout=(2,1))
 end
 
+# ╔═╡ bbd07a54-9217-4bbf-9ed6-361f5fb976e6
+let
+	special_states = Dict(
+		[((1,x), (-100, (1,1), false)) for x = 2:11]
+	)
+	env = Cliff(4,12,special_states, Set([(1,12)]))
+	Q, π, steps = esarsa(env, GridworldAction, 100, 0.9, start=(1,1))
+	
+	p1 = annotated_heatmap(Q, true)
+	p2 = plot(steps, legend=:none, ylabel="episode", xlabel="timestep")
+	
+	# learned policy
+	path, actions = run_policy(π, env, (1,1))
+	p1 = plot!(p1, [x[2] for x in path], [x[1] for x in path], linewidth=3, color=:blue, legend=:none, arrow=true)
+	
+	plot(p1,p2, layout=(2,1))
+end
+
 # ╔═╡ Cell order:
 # ╟─2ac84074-c6ac-11eb-3a87-2b08d5ffa4fc
-# ╟─7fbbaff3-c5f7-46d5-aa9d-2cb0f1fddc50
+# ╠═7fbbaff3-c5f7-46d5-aa9d-2cb0f1fddc50
 # ╟─893783fe-a5d7-4c5e-ba6d-764e9967a60f
-# ╟─788836c3-f7a9-47a1-804e-2ea0127e7b02
+# ╠═788836c3-f7a9-47a1-804e-2ea0127e7b02
 # ╟─db31c17f-37bd-4a5c-8ea0-aafa76919f46
-# ╟─1a1023ec-9e7e-4015-acb0-04fefc9852e3
+# ╠═1a1023ec-9e7e-4015-acb0-04fefc9852e3
 # ╠═7fa89833-aff3-4fad-8144-f099d54b0e4d
 # ╠═1d382eee-1616-4c45-81aa-6b18a3223a48
 # ╟─c8973041-c9c8-4e8e-bc96-2d9691fef86d
@@ -980,16 +1316,26 @@ end
 # ╠═aca031f4-23d5-443b-9f8f-16d641bda22a
 # ╠═6d8ceca5-93fc-4987-afd2-4c61c79b7f80
 # ╟─abf8614d-be09-41a8-93b5-3a118274d8b3
+# ╠═095457b7-0b9d-4e34-ac36-08b438f08b17
 # ╠═cd65cbbf-3b75-4cfc-a1f6-af1a566b3ef6
+# ╠═bbd07a54-9217-4bbf-9ed6-361f5fb976e6
 # ╟─e185420b-c6b6-45c4-8e5f-7c21455a400f
-# ╟─de52a277-75aa-4558-a7b4-843a501c12b5
 # ╠═e810049e-2b75-48a6-8bf1-e98432e84e68
 # ╠═d4603152-17d9-414e-852d-9a7b09b01d46
-# ╠═429845a8-81a8-40d7-b032-f1abbb8b8c36
-# ╠═2a489290-c4b3-4d09-98b3-c3ba445e41f2
+# ╟─429845a8-81a8-40d7-b032-f1abbb8b8c36
+# ╠═a70269b1-b3e1-4114-8a71-330927b38b2f
+# ╠═a37be2bf-f1de-47a5-bb48-1ae580ddf587
+# ╟─2a489290-c4b3-4d09-98b3-c3ba445e41f2
 # ╠═03b88572-cc28-492e-b644-dc505d0d84b1
 # ╠═965d23da-47f5-4568-8bc8-6207eaa04c65
+# ╠═3d8c1ed5-aff8-4bc7-af58-bcd60c190238
+# ╠═eca1fd82-25a1-45db-b8b6-b5db21507792
+# ╠═a3d111f1-999e-4dbc-b586-d12293cf0cb8
+# ╟─ef138518-d771-4f9a-98ad-7bd3ef673438
 # ╠═49918ad5-1b50-406b-ae28-ee05a6412ca2
+# ╠═dd96b3c8-8f93-4089-9c05-3212aea07b95
+# ╠═03618872-d71a-4256-868b-6504fda1aae9
+# ╠═2ccc1982-b869-4fdb-87fd-85165e8afd75
 # ╠═b8c8478e-8723-4648-add2-450ac141b959
 # ╟─b35c60b8-c952-4a7e-bff3-1d296ba25ba3
 # ╠═b8af68b9-b2a9-4b0a-aa2b-b14e09243f59

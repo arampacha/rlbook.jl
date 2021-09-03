@@ -14,218 +14,453 @@ macro bind(def, element)
 end
 
 # ╔═╡ 6237ba02-fc65-11eb-2329-e910205453e1
-using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, Distributions
+using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, Distributions, Distributed
 
 # ╔═╡ bc4ccc14-94d6-4313-819d-db4b37d36915
 begin
 	abstract type AbstractEnv end
 	abstract type AbstractAgent end
 	abstract type AbstractPolicy end
+	abstract type AbstractModel end
 end
 
 # ╔═╡ 1d37f4f9-13c3-4478-b3a6-7f157b3a24bf
-md"# 7. n-step bootstrapping"
+md"# 8. Planning and Learning with Tabular Methods"
 
 # ╔═╡ 32b6eba3-b511-447d-984e-5e5ca063028e
-md"## n-step TD prediction"
+md"## Dyna-Q"
 
-# ╔═╡ 7853c12a-ff15-43af-a860-93bb39d494af
-function random_step(state::Int64, n::Int64=19; left=-1, right=1)
-
-	if rand() >= 0.5
-		state += 1
-	else
-		state -= 1
-	end
-	
-	if state == 0
-		reward = left
-	elseif state == n+1
-		reward = right
-	else
-		reward = 0
-	end
-	
-	return reward, state
+# ╔═╡ 9fd51969-7a5a-4bbb-92de-6d23152c260d
+@inline function allequal(x)
+    length(x) < 2 && return true
+    x1 = x[1]
+    @inbounds for i=2:length(x)
+        x[i] == x1 || return false
+    end
+    return true
 end
 
-# ╔═╡ 8010b7ab-eb0a-4799-bc9a-f6f7a06823c2
-random_step(1, 5)
-
-# ╔═╡ 78303981-d6c3-4ae6-b395-edf46fcbaa8d
-function mrp_ntd(; n=1, α=0.1, init=0., γ=1., n_states=19, left_reward=-1, right_reward=1)
-	V = zeros(n_states) .+ init
-	vs = Array{Float64}(undef, (11, n_states))
-	vs[1, :] = V
-	max_steps = 1_000_000
-	# read and write to memory arrays done mod n+1
-	# 1 is added 'cause julia index starts at 1 (not 0)
-	modn(x) = mod(x, n+1) + 1
-	for i = 2:11
-		rewards = Array{Int64}(undef,n+1)
-		states = Array{Int64}(undef,n+1)
-		s = n_states ÷ 2 + 1
-		states[1] = s
-		T = Inf
-		t = 0
-		while true
-			if t < T
-				r, s = random_step(s, n_states; left=left_reward, right=right_reward)
-				idx = modn(t+1)
-				rewards[idx] = r
-				states[idx] = s
-				
-				if s in [0,n_states+1]
-					T = t+1
-				end
-			end
-			τ = t - n + 1
-			if τ ≥ 0
-				G = sum(
-					[γ^(i-τ-1)*rewards[modn(i)] for i in (τ+1):Int(min(τ+n, T))]
-				)
-				if τ + n < T
-					G = G + γ*V[states[modn(τ+n)]]
-				end
-				upd_state = states[modn(τ)]
-				if !(upd_state in (0, n_states+1))
-					V[upd_state] += α*(G - V[upd_state])
-				end
-			end
-			if (τ ≥ T-1) break end
-			t += 1
+# ╔═╡ c699d0f5-5c5f-40d8-a5b6-ab573c147ebd
+function randargmax(x)
+	ms = [1]
+	m = x[1]
+	@inbounds for i=2:length(x)
+		if x[i] > m
+			m = x[i]
+			ms = [i]
+		elseif x[i] == m
+			push!(ms, i)
 		end
-		vs[i, :] = V
 	end
-	vs
+	return rand(ms)
+end		
+
+# ╔═╡ ce51339c-70cd-4605-af45-15e2a0d117d8
+let 
+	for _ = 1:10
+		a = [rand(1:10) for _ = 1:100]
+		@assert a[randargmax(a)] == maximum(a)
+	end
 end
 
-# ╔═╡ 883b9a36-322d-4683-958d-03d6c7df1515
-md"""
-Num states: $( @bind n_states_str Select([string(n) for n=5:2:25], default="19"))
-"""
-
-# ╔═╡ 2df41fab-8d22-46bd-a647-71aed78d9b37
-let
-	n_states = parse(Int64, n_states_str)
-	lr, rr = -1, 1
-	ref = (rr - lr) .* [i/(n_states+1) for i = 1:n_states] .+ lr
-	
-	errors = Dict()
-	p = plot()
-	
-	for k = 0:4
-		n = 2^k
-		errors_n = []
-		alphas = 0.05:0.05:1.0
-		for α = alphas
-			error = 0
-			for i = 1:500
-				vs = mrp_ntd(n=n, α=α, n_states=n_states, left_reward=lr, right_reward=rr, init=0., )
-				error += (mean((vs[end, :] - ref).^2) - error)/i
-			end
-			push!(errors_n, error)
-		end
-		errors[n] = errors_n
-		plot!(p, alphas, errors_n, label="$n", xlabel="α")
-	end
-	p
+# ╔═╡ 56733988-c9a7-4cc9-9b16-2bea856f8f25
+function greedy_action(Q, s)
+	randargmax(Q[s..., :])
 end
 
-# ╔═╡ a19e5b50-ae55-480c-8cd0-4509f0136770
-function mrp_td(; α=0.1, init=0., γ=1., n_states=19)
-	V = zeros(n_states) .+ init
-	vs = Array{Float64}(undef, (11, n_states))
-	vs[1, :] = V
-	for i = 1: 10
-		s = n_states ÷ 2 + 1
-		while !(s in [0, n_states+1])
-			r, s′ = random_step(s, n_states)
-			Vs′ = (s′ in [0,n_states+1]) ? 0 : V[s′]
-			V[s] += α * (r + γ*Vs′ - V[s])
-			s = s′
-		end
-		vs[i+1, :] = V
-	end
-	vs
+# ╔═╡ 28ec1ed2-a589-408b-9b7e-6a369606cfc1
+function epsilon_greedy_action(Q, s, ε=0.1)
+	rand() < ε && return rand(1:size(Q)[end])
+	greedy_action(Q, s)
 end
 
-# ╔═╡ 81fbb7a2-0e5e-4fb2-9e94-8045c5ac4f3f
-mrp_td()
+# ╔═╡ 0df92799-cde8-4322-ab6d-23ee67bf93e8
+function q_learning_update!(Q, s, a, r, s′, finished; α=1., γ=1.)
+	Q′ = (finished ? 0 : maximum(Q[s′..., :]))
+	Q[s..., a] += α*(r + γ*Q′ - Q[s..., a])
+end
 
-# ╔═╡ 06821113-d686-48cc-9e81-3b8ae3d6e865
-mrp_ntd(n=4)
-
-# ╔═╡ c05e6e98-f0cb-461d-810e-acde34b814d4
-let
-	n_states = parse(Int64, n_states_str)
-	lr, rr = -1, 1
-	ref = (rr - lr) .* [i/(n_states+1) for i = 1:n_states] .+ lr
-	
-	errors = Dict()
-	p = plot()
-	
-	alphas = 0.05:0.05:1.
-	mrp_n1td(; args...) = mrp_ntd(; n=1, args...)
-	for f in [mrp_td, mrp_n1td]
-		errors_f = []
-		for α = alphas
-			error = 0
-			for i = 1:500
-				vs = f(α=α, n_states=n_states)
-				error += (mean((vs[end, :] - ref).^2) - error)/i
-			end
-			push!(errors_f, error)
-		end
-		plot!(p, errors_f)
+# ╔═╡ 9ff10658-ea2d-4f9d-b523-723e35f2c44f
+function model_update!(model::Dict, s,a,r,s′,finished)
+	if ! haskey(model, s)
+		model[s] = Dict()
 	end
-	p
-end;
+	model[s][a] = (r,s′,finished)
+end
 
-# ╔═╡ 2758a0ef-00c1-450a-ab64-05e64dd278e0
-md"## n-step Sarsa"
+# ╔═╡ c3098dcf-ff10-4034-a127-59d02e7c76d1
+function model_update!(model::Array, s,a,r,s′,finished)
+	model[s...,a] = (r, s′, finished)
+end
 
-# ╔═╡ 428b40dc-3b17-46dd-9f19-8d2ddab64c81
+# ╔═╡ 73cfa852-ae33-4138-b56d-ef131c885485
+function sample_state(model::Dict)
+	visited_states = collect(keys(model))
+	(length(visited_states) > 0) ? rand(visited_states) : nothing
+end
+
+# ╔═╡ 69e21e6c-1b06-4b96-82b9-cc402727dd55
+function sample_state(model::Array)
+	m,n,_ = size(model)
+	return [rand(1:m),rand(1:n)]
+end
+
+# ╔═╡ 1949c07a-a369-4e05-a93b-492e5419cacf
+function sample_action(model::Dict, s::Any)
+	haskey(model, s) ? rand(collect(keys(model[s]))) : nothing
+end
+
+# ╔═╡ b6adaba9-8634-4e8d-9672-ec2825b99167
+function sample_action(model::Array, s::Vector)
+	return rand(1:size(model)[end])
+end
+
+# ╔═╡ 50f59b5b-011c-4f7d-afc0-79f272edd089
+function q_planning_step!(Q, model::Dict; action=identity, α=1., γ=1.)
+	s = sample_state(model)
+	a = sample_action(model, s)
+	r, s′,finished = model[s][a]
+	q_learning_update!(Q, s, a, r, s′, finished; α=α, γ=γ)
+end
+
+# ╔═╡ 8fe6aa4a-5635-4184-9f14-f30f88285a6e
+function qplus_planning_step!(Q, model::Array; action=identity, α=1., γ=1., τ=nothing, t=nothing, k=0.01)
+	s = sample_state(model)
+	a = sample_action(model, s)
+	r, s′,finished = model[s...,a]
+	if ! (τ == nothing)
+		r += k*sqrt(t - τ[s...,a])
+	end
+	q_learning_update!(Q, s, a, r, s′, finished; α=α, γ=γ)
+end
+
+# ╔═╡ fefb4308-ac99-4953-94a4-61882216b71c
+md"### Example: Maze"
+
+# ╔═╡ a96ce5d6-b447-4d35-b6b8-462fffdd0fd8
 begin
-	struct WindyGridworld <: AbstractEnv
-		height::Int64
-		width::Int64
-		wind::Vector
-		terminal_states::Set
+	mutable struct Maze <: AbstractEnv
+
+		height::Int
+		width::Int
+		start::Vector{Int}
+		goal::Vector{Int}
+		walls::Set
+		action
+		transition_reward::Float64
+		goal_reward::Float64
 	end
-	function (world::WindyGridworld)(state::Vector, a::Vector)
+	function (world::Maze)(state::Vector, a::Int)
 		y, x = state
 		
-		if ((y,x) in world.terminal_states)
-			return 0, (y,x), true
+		if (state == world.goal)
+			return 0, [y,x], true
 		end
+		
 		
 		m, n = world.height, world.width
 		
-		(dy, dx) = a
+		dy, dx = world.action(a)
 		
-		x, y = clamp(x+dx, 1, n), clamp(y+dy+world.wind[x], 1, m)
+		new_state = [clamp(y+dy, 1, m), clamp(x+dx, 1, n)]
 		
-		return -1, [y,x], ([y,x] in world.terminal_states)
-		
+		if new_state == world.goal
+			return world.goal_reward, world.start, true
+		elseif new_state in world.walls
+			return world.transition_reward, state, false
+		else
+			return world.transition_reward, new_state, false
+		end
+	end
+	
+	function draw(maze::Maze)
+		h,w = maze.height, maze.width
+		M = ones(h, w)
+		for (y,x) in maze.walls
+			M[y,x] = 0
+		end
+		p = heatmap(M, legend=:none)
+		anno = [
+			(maze.start[2], maze.start[1], text("S", color=:blue)),
+			(maze.goal[2],  maze.goal[1],  text("G", color=:green)),
+		]
+		annotate!(p, anno)
+		for i = 1:h
+			hline!(p, [i+0.5], colour=:grey)
+		end
+		for i = 1:w
+			vline!(p, [i+0.5], colour=:grey)
+		end
+		p
 	end
 end
 
-# ╔═╡ c55f23e8-f80a-4df2-a954-4f8442fecf3b
-md"""
-k = $(@bind k1 Slider(0:3, show_value=true, default=1))
-
-α = $(@bind a1 Slider(0.05:0.05:0.5, show_value=true, default=0.1))
-"""
-
-# ╔═╡ a15ffc68-9178-43cf-9ccb-ff26ddf4517f
+# ╔═╡ db2215af-e388-4717-a307-6ee11b2c7dcb
 begin
 	ga = [[0,-1],[0,1],[1,0],[-1,0]]
 	gridworld_action(a) = ga[a]
-	
-	king_moves = [[i-2, j-2] for i=1:3 for j=3:-1:1 if ((i≠2) | (j≠2))]
-	km_action(a) = king_moves[a]
 end
+
+# ╔═╡ 9bc3f073-ac91-4a9e-bf01-64bbb17b0b8e
+# transition and goal rewards for maze
+TR, GR = 0., 1.;
+
+# ╔═╡ d904cd7e-9954-43b7-881d-1c09585f4e3c
+let
+	d1, d2 = 6,9
+	walls = Set([[i, 3] for i=3:5])
+	union!(walls, [[2,6]], [[i,8] for i=4:6])
+	maze = Maze(d1,d2, [4,1], [d1,d2], walls, gridworld_action, TR, GR)
+	draw(maze)
+end
+
+# ╔═╡ dda7cd1c-023c-45af-a826-c2aacf4a63f7
+md"### Blocking Maze"
+
+# ╔═╡ 74fb0e46-6936-4f68-a6c0-6f3f559b722c
+let
+	maze = Maze(6,9, [1,4], [6,9], Set([[3, j] for j = 1:8]), gridworld_action, TR, GR)
+	draw(maze)
+end
+
+# ╔═╡ 2bf8bf98-1290-4063-908b-ae10619fd7da
+md"""
+Num planning steps $(@bind n1 Select([string(n) for n=5:5:50], default="20"))
+
+$(@bind run_blocking Button("Run"))
+"""
+
+# ╔═╡ 883b9a36-322d-4683-958d-03d6c7df1515
+md"""
+Num planning steps: $( @bind n2 Select([string(n) for n=5:5:50], default="20"))
+
+$(@bind run_shortcut Button("Run"))
+"""
+
+# ╔═╡ 2e884365-6df6-4bd1-9476-f5b44c36cbb8
+md"### Shortcut Maze"
+
+# ╔═╡ 2758a0ef-00c1-450a-ab64-05e64dd278e0
+md"## Trajectory Sampling"
+
+# ╔═╡ 324c78f9-4a08-4f73-8001-cbd19172d135
+begin
+	struct RandomEnv <: AbstractEnv
+		n::Int
+		b::Int
+		reward::Array
+		transition::Array
+		
+		function RandomEnv(n,b)
+			reward = randn(n,2,b)
+			transition = [rand(1:n) for i=1:n,j=1:2,k=1:b]
+			new(n,b,reward,transition)
+		end
+	end
+	
+	function (env::RandomEnv)(s,a)
+		if rand() < 0.1
+			return 0, 1, true
+		else
+			b = rand(1:env.b)
+			s′ = env.transition[s,a,b]
+			r = env.reward[s,a,b]
+			return r, s′, false
+		end
+	end
+end
+
+# ╔═╡ d11fea88-983f-46ce-8abe-b40062711ca4
+let 
+	env = RandomEnv(10,1)
+	history = []
+	finished = false
+	s = 1
+	while ! finished
+		r, s, finished = env(s,rand(1:2))
+		push!(history, (r=r, s=s))
+	end
+	history
+end
+
+# ╔═╡ ed35f996-f810-457a-b142-8fe89467759f
+function mc_evaluation(Q, env, s)
+	s0 = s
+	vs0 = 0
+	for i in 1:1000
+		s, finished = s0, false
+		tot = 0
+		while !(finished)
+			a = randargmax(Q[s, :])
+			r, s, finished = env(s, a)
+			tot += r
+		end
+		vs0 += (tot - vs0)/i
+	end
+	vs0
+end
+
+# ╔═╡ 712e2914-95fe-42e1-babb-e699a01f8d46
+function dp_evaluation(Q, env, s)
+	s_ = s
+	V = zeros(size(Q)[1])
+	delta = Inf
+	step = 0
+	while (delta > 1e-3) && step < 100
+		step += 1
+		delta = 0
+		for s = 1:env.n
+			v = V[s]
+			a = randargmax(Q[s, :])
+			sps = env.transition[s,a,:]
+			v′ = mean(V[sps])
+			V[s] = 0.9*(mean(env.reward[s,a,:]) + v′)
+			delta = max(delta, abs(v-V[s]))
+		end
+	end
+	V[s_]
+end
+
+# ╔═╡ b6a17640-99ca-4d43-80a2-16b6e6163306
+function evaluate(Q, env, s, method="mc")
+	if method == "mc"
+		return mc_evaluation(Q, env, s)
+	elseif method == "dp"
+		return dp_evaluation(Q, env, s)
+	else
+		throw("Method should be one of [dp, mc]")
+	end
+end
+
+# ╔═╡ 269bfdb6-1afd-4352-a158-7fd30ac78308
+let 
+	env = RandomEnv(10,1)
+	history = []
+	finished = false
+	s = 1
+	while ! finished
+		r, s, finished = env(s,rand(1:2))
+		push!(history, (r=r, s=s))
+	end
+	history
+end
+
+# ╔═╡ b0773508-b8ae-4870-9cdf-a5978e80c335
+function uniform_sampling(env)
+	n, b = env.n, env.b
+	Q = zeros(env.n, 2)
+	π = ones(size(Q)) ./ size(Q)[end]
+	value_estimates = [0.]
+	steps = [0]
+	step = 0
+	n_updates = env.n * 2 * 10
+	eval_step = n_updates ÷ 20
+	while step < n_updates
+		for s = 1:n, a = 1:2
+			step += 1
+			# r, s′, _ = env(s, a)
+			# sample update
+			# Q[s,a] = 0.9*(r + 0.9*maximum(Q[s′,:]))
+			# expected update
+			sps = env.transition[s,a,:]
+			q′ = mean(maximum(Q[sps, :], dims=2))
+			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + q′)
+			# update_policy!(π, Q, s; ε=0.)
+			if mod(step, eval_step) == 0
+				push!(value_estimates, evaluate(Q, env, 1, "mc"))
+				push!(steps, step)
+			end
+		end
+	end
+	Q, value_estimates
+end
+
+# ╔═╡ d1aa7306-d5a3-4e73-957b-1e94bf0d1583
+let
+	vs = []
+	for i = 1:10
+		env = RandomEnv(1000, 3)
+		push!(vs, uniform_sampling(env)[2])
+	end
+	plot(mean(vs, dims=1)[1])
+end
+
+# ╔═╡ 1768a69b-dafd-47c3-be23-98d6eb9fca9b
+function dp_update!(Q, s, a)
+	nothing
+end
+
+# ╔═╡ 657591f3-b4db-4a3e-a2a3-bd99e2599b34
+function trajectory_sampling(env; ε=0.1)
+	Q = zeros(env.n, 2)
+	π = ones(size(Q)) ./ size(Q)[end]
+	value_estimates = [0.]
+	steps = [0]
+	step = 0
+	# one episode is 10 updates in expectation
+	n_episodes = 2 * env.n
+	eval_step = n_episodes ÷ 20
+	for e = 1:n_episodes
+		s, finished = 1, false
+		while !(finished)
+			step += 1
+			a = (rand() < ε) ? rand(1:2) : randargmax(Q[s, :])
+			r, s′, finished = env(s, a)
+			# sample update
+			# Q[s,a] = 0.9*(r + 0.9*maximum(Q[s′,:]))
+			# expected update
+			sps = env.transition[s,a,:]
+			q′ = mean(maximum(Q[sps, :], dims=2))
+			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + q′)
+			s = s′
+			# update_policy!(π, Q, s; ε=0.)
+		end
+		if mod(e, eval_step) == 0
+			push!(value_estimates, evaluate(Q, env, 1, "mc"))
+			push!(steps, step)
+		end
+	end
+	Q, value_estimates
+end
+
+# ╔═╡ 161456a4-a951-4075-9ab5-245303117eca
+let
+	vs = []
+	for _ = 1:10
+		env = RandomEnv(1000,3)
+		push!(vs, trajectory_sampling(env)[2])
+	end
+	plot(mean(vs, dims=1)[1])
+end
+
+# ╔═╡ 8d2b802e-345e-43d3-9bef-4354ebdaf82e
+function experiment_88(n::Int=1000, b::Int=1)
+	uniform_vs, trajectory_vs = [], []
+	
+	for i = 1:50
+		env = RandomEnv(n, b)
+		push!(uniform_vs, uniform_sampling(env)[2])
+		push!(trajectory_vs, trajectory_sampling(env)[2])
+	end
+	p = plot(title="b = $(b)")
+	p = plot!(p, mean(uniform_vs, dims=1)[1], label="uniform", legend=:bottomright)
+	plot!(p, mean(trajectory_vs, dims=1)[1], label="trajectory")
+end
+
+# ╔═╡ 27bbfedf-7563-44e9-a623-25dedc7f1ef3
+experiment_88(1000, 1)
+
+# ╔═╡ ee888bfa-eb56-4e73-bcc4-7383beb1f631
+experiment_88(1000, 3)
+
+# ╔═╡ ac8393b6-f36c-4da3-9c78-6df9359109d4
+experiment_88(1000,10)
+
+# ╔═╡ 011c137d-0242-4404-9741-4c80ad574adc
+experiment_88(10_000, 1)
+
+# ╔═╡ 2c765608-6d5e-442d-949c-add9c3783dbf
+experiment_88(10_000, 3)
 
 # ╔═╡ e7406761-a290-476a-a8a3-68f3735a044c
 begin	
@@ -286,117 +521,269 @@ begin
 	end
 end
 
+# ╔═╡ 0b13943a-e871-4942-83d7-9df3cc5a5ed6
+function policy_update!(π, Q, s; ε=0.1)
+	na = size(π)[end]
+	if allequal(Q[s..., :])
+		π[s..., :] .= 1/na 
+	else
+		π[s..., :] = ((1-ε)*onehot(randargmax(Q[s..., :]), na) +
+					  ε .* ones(na) ./ na)
+	end
+end
+
+# ╔═╡ 347520cf-bede-47cc-a6fe-6f6f771161f6
+function dyna_q!(
+		Q::Array, 
+		π::Array,
+		env::AbstractEnv,
+		model::Dict,
+		s::Vector;
+		n::Int=50,
+		action=identity,
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000,
+		env_callback=identity
+	)
+	na = size(Q)[end]
+	
+	rewards = []
+	steps_per_episode = []
+	s = env.start
+	t = 0
+	last_terminal = 0
+	while true && (t < max_steps)
+		t += 1
+		# direct RL
+		#a = sample(1:na, ProbabilityWeights(π[s..., :]))
+		a = epsilon_greedy_action(Q, s, ε)
+		r, s′,finished = env(s, a)
+		q_learning_update!(Q,s,a,r,s′,finished; α=α, γ=γ)
+		policy_update!(π, Q, s; ε=ε)
+		model_update!(model, s, a, r, s′,finished)
+		s = s′
+		push!(rewards, r)
+		if finished
+			push!(steps_per_episode, t-last_terminal)
+			last_terminal = t
+		end
+		# planning
+		for _ = 1:n
+			q_planning_step!(Q, model; α=α, γ=γ)
+		end
+		if t == 1000
+			env_callback(env)
+		end
+	end
+	rewards, steps_per_episode
+end
+
+# ╔═╡ 9b190926-f617-434d-bcec-517951e3e3b3
+let
+	d1, d2 = 6,9
+	walls = Set()
+	union!(walls, [[i, 3] for i=3:5], [[2,6]], [[i,8] for i=4:6])
+	env = Maze(d1,d2, [4,1], [d1,d2], walls, gridworld_action, TR, GR)
+	
+	
+	# no planning
+	Q = zeros(d1,d2,4) # .+ 0.01
+	π = ones(size(Q)) / size(Q)[end]
+	model = Dict()
+	
+	rewards0, steps_per_episode0 = dyna_q!(Q, π, env, model, env.start; n=0, α=.1, γ=0.95, max_steps=5000)
+	
+	# n = 5
+	Q = zeros(d1,d2,4) #.+ 0.01
+	π = ones(size(Q)) / size(Q)[end]
+	model = Dict()
+	
+	rewards5, steps_per_episode5 = dyna_q!(Q, π, env, model, env.start; n=5, α=.1, γ=0.95, max_steps=5000)
+	
+	# n = 50
+	Q = zeros(d1,d2,4) #.+ 0.01
+	π = ones(size(Q)) / size(Q)[end]
+	model = Dict()
+	
+	rewards50, steps_per_episode50 = dyna_q!(Q, π, env, model, env.start; n=50, α=.1, γ=0.95, max_steps=5000)
+	
+	p = plot(ylabel="Steps per episode", xlabel="episode", xlims=(0,50), ylims=(0,850))
+	plot!(p, steps_per_episode0, label="No planning")
+	plot!(p, steps_per_episode5, label="n = 5")
+	plot!(p, steps_per_episode50, label="n = 50")
+end
+
+# ╔═╡ cc5476f7-3f51-4eb0-bdc2-c7855c70ed5a
+function dyna_qp!(
+		Q::Array, 
+		π::Array,
+		env::AbstractEnv,
+		model::Array,
+		s::Vector;
+		n::Int=50,
+		action=identity,
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		k::Float64=1e-3,
+		start=nothing,
+		max_steps=1000,
+		env_callback=identity,
+	)
+	na = size(Q)[end]
+	
+	rewards = []
+	steps_per_episode = []
+	s = env.start
+	t = 0
+	last_terminal = 0
+	τ = zeros(size(Q))
+	while true && (t < max_steps)
+		t += 1
+		# direct RL
+		# a = sample(1:na, ProbabilityWeights(π[s..., :]))
+		a = epsilon_greedy_action(Q, s, ε)
+		τ[s...,a] = t
+		r, s′,finished = env(s, a)
+		q_learning_update!(Q,s,a,r,s′,finished; α=α, γ=γ)
+		policy_update!(π, Q, s; ε=ε)
+		model_update!(model, s, a, r, s′,finished)
+		s = s′
+		push!(rewards, r)
+		if finished
+			push!(steps_per_episode, t-last_terminal)
+			last_terminal = t
+		end
+		# planning
+		for _ = 1:n
+			qplus_planning_step!(Q, model; α=α, γ=γ, τ=τ, t=t, k=k)
+		end
+		if t == 1000
+			env_callback(env)
+		end
+	end
+	rewards, steps_per_episode
+end
+
+# ╔═╡ 305bab1b-1d01-4e63-b733-bf953c4734cc
+let
+	run_blocking
+	# hypers
+	n = parse(Int, n1)
+	α = .5
+	γ = 0.95
+	k = 1e-3
+	# env
+	d1, d2 = 6,9
+	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 1:d2-1]), gridworld_action, TR, GR)
+	function block!(env)
+		pop!(env.walls, [3,1])
+		push!(env.walls, [3,d2])
+	end
+	# dyna-Q
+	model = Dict()
+	Q = zeros(d1,d2,4)
+	π = ones(size(Q)) / size(Q)[end]
+	
+	rewards1, steps_per_episode1 = dyna_q!(Q, π, env, model, env.start; n=n, α=1., γ=0.95, max_steps=3000, env_callback=block!)
+	
+	# dyna-Q+
+	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 1:d2-1]), gridworld_action, TR, GR)
+	model = [(0, [i,j],false) for i=1:d1, j=1:d2, a=1:4]
+	Q = zeros(d1,d2,4)
+	π = ones(size(Q)) / size(Q)[end]
+	
+	rewards2, steps_per_episode2 = dyna_qp!(Q,π,env,model,env.start; n=n, α=α,γ=γ,k=k, max_steps=3000, env_callback=block!)
+	
+	p1 = plot(steps_per_episode1, label="Dyna-Q", ylabel="Steps per episode", xlabel="episode")
+	plot!(p1, steps_per_episode2, label="Dyna-Q+")
+	
+	p2 = plot(cumsum(rewards1), label="Dyna-Q", legend=:bottomright, ylabel="Cumulative reward", xlabel="step")
+	plot!(p2, cumsum(rewards2), label="Dyna-Q+")
+	
+	plot(p1,p2, layout=(2,1))
+end
+
+# ╔═╡ 522c4458-dd9b-4ff2-80ee-163a105d8a67
+let
+	run_shortcut
+	# hypers
+	n = parse(Int, n2)
+	α = .5
+	γ = 0.95
+	k = 1e-3
+	# env
+	d1, d2 = 6,9
+	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 2:d2]), gridworld_action, TR, GR)
+	function shortcut!(env)
+		pop!(env.walls, [3,d2])
+	end
+	# dyna-Q
+	model = Dict()
+	Q = zeros(d1,d2,4) .+ 1. 
+	π = ones(size(Q)) / size(Q)[end]
+	
+	rewards1, steps_per_episode1 = dyna_q!(Q, π, env, model, env.start; n=n, α=α, γ=γ, max_steps=3000, env_callback=shortcut!)
+	
+	# dyna-Q+
+	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 2:d2]), gridworld_action, TR, GR)
+	model = [(0, [i,j],false) for i=1:d1, j=1:d2, a=1:4]
+	Q = zeros(d1,d2,4) .+ 1. 
+	π = ones(size(Q)) / size(Q)[end]
+	
+	rewards2, steps_per_episode2 = dyna_qp!(Q,π,env,model,env.start; n=n, α=α,γ=γ,k=k, max_steps=3000, env_callback=shortcut!)
+	
+	p1 = plot(steps_per_episode1, label="Dyna-Q", ylabel="Steps per episode", xlabel="episode", ylim=(0,100))
+	plot!(p1, steps_per_episode2, label="Dyna-Q+")
+	
+	p2 = plot(cumsum(rewards1), label="Dyna-Q", legend=:bottomright, ylabel="Cumulative reward", xlabel="step")
+	plot!(p2, cumsum(rewards2), label="Dyna-Q+")
+	
+	plot(p1,p2, layout=(2,1))
+end
+
+# ╔═╡ 085ac6f6-6f50-4ac9-95a2-2a27176774cc
+function ql_step!(
+		Q::Array, 
+		π::Array,
+		env::AbstractEnv,
+		s::Vector;
+		action=identity,
+		α::Float64=0.5,
+		ε::Float64=0.1,
+		γ::Float64=1.,
+		start=nothing,
+		max_steps=1000
+	)
+	
+	m, n = env.height, env.width
+	na = size(Q)[end]
+	a = sample(1:na, ProbabilityWeights(π[s..., :]))
+	
+	r, s′, finished = env(s, a)
+		
+	Q′ = (finished ? 0 : maximum(Q[s′..., :]))
+	Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
+		
+	#ε-greedy policy based on Q
+	π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
+				  ε .* ones(na) ./ na)
+		
+	s = s′
+	
+	h = (n=j, r = total_reward)
+	return Q, π, h
+end
+
 # ╔═╡ 83e3dc6b-3266-4f19-9f65-1635112ec800
 function update_policy!(π, Q, s; ε=0.1)
 	na = size(π)[end]
 	π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
 				  ε .* ones(na) ./ na)
 end
-
-# ╔═╡ 64d71fbd-81d0-4742-9008-f95572fe1358
-function n_sarsa!(
-		env::AbstractEnv, Q::Array, π::Array, s0::Vector;
-		action = x -> x, n=1, α=0.5, ε=0.1, γ=1.,
-	)
-	S = [Vector{Int}(undef, length(s0)) for _ = 1:n+1]
-	A = Vector{Any}(nothing,n+1)
-	R = Vector{Int64}(undef,n+1)
-	modn(x) = mod(x, n+1) + 1
-	na = size(Q)[end]
-	
-	s = s0
-	a = sample(1:na, ProbabilityWeights(π[s...,:]))
-	S[1], A[1] = s, a
-	# warning: using max value for Int type instead of Inf
-	# here it's handy but not a good practice in general
-	T = typemax(Int)
-	t = 0
-	while true
-		if t < T
-			idx = modn(t+1)
-			r, s, finished = env(s, action(a))
-			S[idx] = s
-			R[idx] = r
-			if finished
-				T = t
-			else
-				a = sample(1:na, ProbabilityWeights(π[s...,:]))
-				A[idx] = a
-			end
-		end
-		
-		τ = t-n+1
-		if τ ≥ 0
-			G = sum(
-				[γ^(i-τ-1)*R[modn(i)] for i = τ+1:min(τ+n, T)]
-			)
-			if (τ+n < T) G += γ^n * Q[S[modn(τ+n)]..., A[modn(τ+n)]] end
-			
-			#sarsa update
-			upd_idx = modn(τ)
-			Q[S[upd_idx]..., A[upd_idx]] += α*(G - Q[S[upd_idx]..., A[upd_idx]])
-			# policy update
-			update_policy!(π, Q, S[upd_idx]; ε=ε)
-		end
-		if (τ ≥ T-1) break end
-		t += 1
-	end
-end
-
-# ╔═╡ 58704e5b-2103-4804-a5c1-f40c097a130f
-let
-	d1, d2 = 7,10
-	wind = zeros(Int64, d2)
-	wind = [0,0,0,1,1,1,2,2,1,0]
-	# wind = [0,0,0,0,0,1,1,1,0,0]
-	env = WindyGridworld(d1, d2, wind, Set([[4,8]]))
-	Q = zeros(d1,d2,4)
-	π = ones(size(Q)) / size(Q)[end]
-	for e = 1:400
-		n_sarsa!(env, Q, π, [4,1]; n=2^k1, action=km_action, α=a1)
-	end
-	Q, π
-	
-	p1 = annotated_heatmap(Q, true)
-	# p2 = plot(steps, legend=:none, ylabel="episode", xlabel="timestep")
-	p1 = annotate!(p1, [(1,4, text("▤", :green)), (8,4, text("x", :red))])
-	# learned policy
-	path, actions = run_policy(π, env, [4,1])
-	p1 = plot!(p1, [x[2] for x in path], [x[1] for x in path], linewidth=3, color=:blue, legend=:none, arrow=true)
-	# plot(p1,p2, layout=(2,1))
-end
-
-# ╔═╡ 20f556dc-5bd9-450e-a7b0-a19283e2d2cd
-ga
-
-# ╔═╡ 81840035-c008-4f5a-b6ef-3656879bd38d
-let 
-	a = (1,2,3)
-	x,y = a
-	[1,2] in Set([[1,2]])
-	π
-end
-
-# ╔═╡ 9c558282-06df-4d8f-ab27-8bdf3ffe8019
-md"## n-step off-policy Sarsa"
-
-# ╔═╡ 50388e65-50d5-4616-8c21-58ba54299db9
-typeof([1,2])
-
-# ╔═╡ 9ed58bbf-10ca-48a7-a92d-6003122996a3
-md"## Tree-backup Algorithm"
-
-# ╔═╡ 77839436-54b4-4483-8ba0-40a18bcd19c7
-
-
-# ╔═╡ 05dcb832-f367-40ff-8a8d-a82f364bfd57
-md"## Q(σ)"
-
-# ╔═╡ ff6d19a2-8b58-4f5e-bb36-ef126fc46ed6
-
-
-# ╔═╡ 3cf85f7a-d6f6-4fb7-be38-2056b7d36884
-if true a = 1 end
 
 # ╔═╡ 706c2093-1554-45d0-8774-ab6651257671
 md"fin"
@@ -407,6 +794,7 @@ TableOfContents()
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
+Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
@@ -1320,32 +1708,57 @@ version = "0.9.1+5"
 # ╟─bc4ccc14-94d6-4313-819d-db4b37d36915
 # ╟─1d37f4f9-13c3-4478-b3a6-7f157b3a24bf
 # ╟─32b6eba3-b511-447d-984e-5e5ca063028e
-# ╠═7853c12a-ff15-43af-a860-93bb39d494af
-# ╠═8010b7ab-eb0a-4799-bc9a-f6f7a06823c2
-# ╠═78303981-d6c3-4ae6-b395-edf46fcbaa8d
+# ╟─9fd51969-7a5a-4bbb-92de-6d23152c260d
+# ╟─c699d0f5-5c5f-40d8-a5b6-ab573c147ebd
+# ╟─ce51339c-70cd-4605-af45-15e2a0d117d8
+# ╠═56733988-c9a7-4cc9-9b16-2bea856f8f25
+# ╠═28ec1ed2-a589-408b-9b7e-6a369606cfc1
+# ╠═0df92799-cde8-4322-ab6d-23ee67bf93e8
+# ╠═0b13943a-e871-4942-83d7-9df3cc5a5ed6
+# ╟─9ff10658-ea2d-4f9d-b523-723e35f2c44f
+# ╟─c3098dcf-ff10-4034-a127-59d02e7c76d1
+# ╟─73cfa852-ae33-4138-b56d-ef131c885485
+# ╟─69e21e6c-1b06-4b96-82b9-cc402727dd55
+# ╟─1949c07a-a369-4e05-a93b-492e5419cacf
+# ╟─b6adaba9-8634-4e8d-9672-ec2825b99167
+# ╠═50f59b5b-011c-4f7d-afc0-79f272edd089
+# ╠═8fe6aa4a-5635-4184-9f14-f30f88285a6e
+# ╠═347520cf-bede-47cc-a6fe-6f6f771161f6
+# ╟─fefb4308-ac99-4953-94a4-61882216b71c
+# ╠═a96ce5d6-b447-4d35-b6b8-462fffdd0fd8
+# ╟─db2215af-e388-4717-a307-6ee11b2c7dcb
+# ╟─085ac6f6-6f50-4ac9-95a2-2a27176774cc
+# ╠═9bc3f073-ac91-4a9e-bf01-64bbb17b0b8e
+# ╠═d904cd7e-9954-43b7-881d-1c09585f4e3c
+# ╠═9b190926-f617-434d-bcec-517951e3e3b3
+# ╟─dda7cd1c-023c-45af-a826-c2aacf4a63f7
+# ╠═74fb0e46-6936-4f68-a6c0-6f3f559b722c
+# ╟─2bf8bf98-1290-4063-908b-ae10619fd7da
+# ╠═305bab1b-1d01-4e63-b733-bf953c4734cc
+# ╠═cc5476f7-3f51-4eb0-bdc2-c7855c70ed5a
 # ╟─883b9a36-322d-4683-958d-03d6c7df1515
-# ╠═2df41fab-8d22-46bd-a647-71aed78d9b37
-# ╟─a19e5b50-ae55-480c-8cd0-4509f0136770
-# ╠═81fbb7a2-0e5e-4fb2-9e94-8045c5ac4f3f
-# ╠═06821113-d686-48cc-9e81-3b8ae3d6e865
-# ╟─c05e6e98-f0cb-461d-810e-acde34b814d4
-# ╟─2758a0ef-00c1-450a-ab64-05e64dd278e0
-# ╠═64d71fbd-81d0-4742-9008-f95572fe1358
+# ╟─2e884365-6df6-4bd1-9476-f5b44c36cbb8
+# ╠═522c4458-dd9b-4ff2-80ee-163a105d8a67
+# ╠═2758a0ef-00c1-450a-ab64-05e64dd278e0
+# ╠═324c78f9-4a08-4f73-8001-cbd19172d135
+# ╠═d11fea88-983f-46ce-8abe-b40062711ca4
+# ╟─ed35f996-f810-457a-b142-8fe89467759f
+# ╟─712e2914-95fe-42e1-babb-e699a01f8d46
+# ╠═b6a17640-99ca-4d43-80a2-16b6e6163306
+# ╠═269bfdb6-1afd-4352-a158-7fd30ac78308
+# ╠═b0773508-b8ae-4870-9cdf-a5978e80c335
+# ╠═d1aa7306-d5a3-4e73-957b-1e94bf0d1583
+# ╠═1768a69b-dafd-47c3-be23-98d6eb9fca9b
+# ╠═657591f3-b4db-4a3e-a2a3-bd99e2599b34
+# ╠═161456a4-a951-4075-9ab5-245303117eca
+# ╠═8d2b802e-345e-43d3-9bef-4354ebdaf82e
+# ╠═27bbfedf-7563-44e9-a623-25dedc7f1ef3
+# ╠═ee888bfa-eb56-4e73-bcc4-7383beb1f631
+# ╠═ac8393b6-f36c-4da3-9c78-6df9359109d4
+# ╠═011c137d-0242-4404-9741-4c80ad574adc
+# ╠═2c765608-6d5e-442d-949c-add9c3783dbf
 # ╟─83e3dc6b-3266-4f19-9f65-1635112ec800
-# ╟─428b40dc-3b17-46dd-9f19-8d2ddab64c81
 # ╟─e7406761-a290-476a-a8a3-68f3735a044c
-# ╟─c55f23e8-f80a-4df2-a954-4f8442fecf3b
-# ╠═58704e5b-2103-4804-a5c1-f40c097a130f
-# ╠═a15ffc68-9178-43cf-9ccb-ff26ddf4517f
-# ╠═20f556dc-5bd9-450e-a7b0-a19283e2d2cd
-# ╠═81840035-c008-4f5a-b6ef-3656879bd38d
-# ╟─9c558282-06df-4d8f-ab27-8bdf3ffe8019
-# ╠═50388e65-50d5-4616-8c21-58ba54299db9
-# ╠═9ed58bbf-10ca-48a7-a92d-6003122996a3
-# ╠═77839436-54b4-4483-8ba0-40a18bcd19c7
-# ╠═05dcb832-f367-40ff-8a8d-a82f364bfd57
-# ╠═ff6d19a2-8b58-4f5e-bb36-ef126fc46ed6
-# ╠═3cf85f7a-d6f6-4fb7-be38-2056b7d36884
 # ╟─706c2093-1554-45d0-8774-ab6651257671
 # ╟─5873ab3e-db69-441b-bcfd-b698f9956096
 # ╟─00000000-0000-0000-0000-000000000001
