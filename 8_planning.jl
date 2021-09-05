@@ -227,14 +227,14 @@ end
 md"""
 Num planning steps $(@bind n1 Select([string(n) for n=5:5:50], default="20"))
 
-$(@bind run_blocking Button("Run"))
+$(@bind run_blocking Button("Rerun"))
 """
 
 # ╔═╡ 883b9a36-322d-4683-958d-03d6c7df1515
 md"""
 Num planning steps: $( @bind n2 Select([string(n) for n=5:5:50], default="20"))
 
-$(@bind run_shortcut Button("Run"))
+$(@bind run_shortcut Button("Rerun"))
 """
 
 # ╔═╡ 2e884365-6df6-4bd1-9476-f5b44c36cbb8
@@ -260,7 +260,7 @@ begin
 	
 	function (env::RandomEnv)(s,a)
 		if rand() < 0.1
-			return 0, 1, true
+			return 0, 0, true
 		else
 			b = rand(1:env.b)
 			s′ = env.transition[s,a,b]
@@ -411,7 +411,7 @@ function trajectory_sampling(env; ε=0.1)
 			# expected update
 			sps = env.transition[s,a,:]
 			q′ = mean(maximum(Q[sps, :], dims=2))
-			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + q′)
+			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + 0.9*q′)
 			s = s′
 			# update_policy!(π, Q, s; ε=0.)
 		end
@@ -461,6 +461,47 @@ experiment_88(10_000, 1)
 
 # ╔═╡ 2c765608-6d5e-442d-949c-add9c3783dbf
 experiment_88(10_000, 3)
+
+# ╔═╡ e93dc2cb-f9dd-4a48-8380-1c31aae357e1
+let 
+	avg = 0
+	for i = 1:10000
+		finished = false
+		tot = 0
+		while ! finished
+			if rand() < 0.1
+				finished = true
+			else
+				tot += maximum(randn(2))
+			end
+		end
+		avg += (tot-avg)/i
+	end
+	avg
+end
+
+# ╔═╡ 6ee30e3f-d6cd-4950-8851-7f31967ad630
+# let
+# 	avgs = []
+# 	for _ in 1:1000
+# 		env = RandomEnv(1000, 1)
+# 		avg = 0
+# 		for i = 1:1000
+
+# 			finished = false
+# 			tot = 0
+# 			s = 1
+
+# 			while ! finished
+# 				r, s, finished = env(s, argmax(env.reward[s, :]))
+# 				tot += r
+# 			end
+# 			avg += (tot-avg)/i
+# 		end
+# 		push!(avgs, avg)
+# 	end
+# 	avgs, mean(avgs), std(avgs)
+# end
 
 # ╔═╡ e7406761-a290-476a-a8a3-68f3735a044c
 begin	
@@ -1736,13 +1777,13 @@ version = "0.9.1+5"
 # ╟─2bf8bf98-1290-4063-908b-ae10619fd7da
 # ╠═305bab1b-1d01-4e63-b733-bf953c4734cc
 # ╠═cc5476f7-3f51-4eb0-bdc2-c7855c70ed5a
-# ╟─883b9a36-322d-4683-958d-03d6c7df1515
+# ╠═883b9a36-322d-4683-958d-03d6c7df1515
 # ╟─2e884365-6df6-4bd1-9476-f5b44c36cbb8
 # ╠═522c4458-dd9b-4ff2-80ee-163a105d8a67
 # ╠═2758a0ef-00c1-450a-ab64-05e64dd278e0
 # ╠═324c78f9-4a08-4f73-8001-cbd19172d135
 # ╠═d11fea88-983f-46ce-8abe-b40062711ca4
-# ╟─ed35f996-f810-457a-b142-8fe89467759f
+# ╠═ed35f996-f810-457a-b142-8fe89467759f
 # ╟─712e2914-95fe-42e1-babb-e699a01f8d46
 # ╠═b6a17640-99ca-4d43-80a2-16b6e6163306
 # ╠═269bfdb6-1afd-4352-a158-7fd30ac78308
@@ -1757,6 +1798,8 @@ version = "0.9.1+5"
 # ╠═ac8393b6-f36c-4da3-9c78-6df9359109d4
 # ╠═011c137d-0242-4404-9741-4c80ad574adc
 # ╠═2c765608-6d5e-442d-949c-add9c3783dbf
+# ╠═e93dc2cb-f9dd-4a48-8380-1c31aae357e1
+# ╠═6ee30e3f-d6cd-4950-8851-7f31967ad630
 # ╟─83e3dc6b-3266-4f19-9f65-1635112ec800
 # ╟─e7406761-a290-476a-a8a3-68f3735a044c
 # ╟─706c2093-1554-45d0-8774-ab6651257671
