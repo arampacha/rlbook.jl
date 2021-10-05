@@ -1,841 +1,239 @@
 ### A Pluto.jl notebook ###
-# v0.16.0
+# v0.16.1
 
 using Markdown
 using InteractiveUtils
 
-# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
-macro bind(def, element)
-    quote
-        local el = $(esc(element))
-        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : missing
-        el
-    end
-end
+# ╔═╡ da640d6a-244b-11ec-1105-95f4ef08195d
+using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, Distributions
 
-# ╔═╡ 6237ba02-fc65-11eb-2329-e910205453e1
-using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, Distributions, Distributed
-
-# ╔═╡ bc4ccc14-94d6-4313-819d-db4b37d36915
+# ╔═╡ e5dfefbd-793d-4bfb-a88e-9da7e7c4027f
 begin
 	abstract type AbstractEnv end
 	abstract type AbstractAgent end
 	abstract type AbstractPolicy end
-	abstract type AbstractModel end
 end
 
-# ╔═╡ 1d37f4f9-13c3-4478-b3a6-7f157b3a24bf
-md"# 8. Planning and Learning with Tabular Methods"
+# ╔═╡ 17d67fde-7b90-4633-9eb2-877e2e4e2702
+md"# On-policy prediction with approximation"
 
-# ╔═╡ 32b6eba3-b511-447d-984e-5e5ca063028e
-md"## Dyna-Q"
+# ╔═╡ 020ade6d-2a0c-44af-96b8-fc843e8fafbd
+TableOfContents()
 
-# ╔═╡ 9fd51969-7a5a-4bbb-92de-6d23152c260d
-@inline function allequal(x)
-    length(x) < 2 && return true
-    x1 = x[1]
-    @inbounds for i=2:length(x)
-        x[i] == x1 || return false
-    end
-    return true
-end
-
-# ╔═╡ c699d0f5-5c5f-40d8-a5b6-ab573c147ebd
-function randargmax(x)
-	ms = [1]
-	m = x[1]
-	@inbounds for i=2:length(x)
-		if x[i] > m
-			m = x[i]
-			ms = [i]
-		elseif x[i] == m
-			push!(ms, i)
+# ╔═╡ ed0b0d7a-2be0-42ec-99b0-e893ca95b4f2
+function getindex_ext(a, s, e)
+	res = zeros(e-s+1)
+	for i = s:e
+		if i < 1
+			v = -1
+		elseif i > length(a)
+			v = 1
+		else
+			@inbounds v = a[i]
 		end
+		res[i-s+1] = v
 	end
-	return rand(ms)
-end		
-
-# ╔═╡ ce51339c-70cd-4605-af45-15e2a0d117d8
-let 
-	for _ = 1:10
-		a = [rand(1:10) for _ = 1:100]
-		@assert a[randargmax(a)] == maximum(a)
-	end
+	return res
 end
 
-# ╔═╡ 56733988-c9a7-4cc9-9b16-2bea856f8f25
-function greedy_action(Q, s)
-	randargmax(Q[s..., :])
-end
-
-# ╔═╡ 28ec1ed2-a589-408b-9b7e-6a369606cfc1
-function epsilon_greedy_action(Q, s, ε=0.1)
-	rand() < ε && return rand(1:size(Q)[end])
-	greedy_action(Q, s)
-end
-
-# ╔═╡ 0df92799-cde8-4322-ab6d-23ee67bf93e8
-function q_learning_update!(Q, s, a, r, s′, finished; α=1., γ=1.)
-	Q′ = (finished ? 0 : maximum(Q[s′..., :]))
-	Q[s..., a] += α*(r + γ*Q′ - Q[s..., a])
-end
-
-# ╔═╡ 9ff10658-ea2d-4f9d-b523-723e35f2c44f
-function model_update!(model::Dict, s,a,r,s′,finished)
-	if ! haskey(model, s)
-		model[s] = Dict()
-	end
-	model[s][a] = (r,s′,finished)
-end
-
-# ╔═╡ c3098dcf-ff10-4034-a127-59d02e7c76d1
-function model_update!(model::Array, s,a,r,s′,finished)
-	model[s...,a] = (r, s′, finished)
-end
-
-# ╔═╡ 73cfa852-ae33-4138-b56d-ef131c885485
-function sample_state(model::Dict)
-	visited_states = collect(keys(model))
-	(length(visited_states) > 0) ? rand(visited_states) : nothing
-end
-
-# ╔═╡ 69e21e6c-1b06-4b96-82b9-cc402727dd55
-function sample_state(model::Array)
-	m,n,_ = size(model)
-	return [rand(1:m),rand(1:n)]
-end
-
-# ╔═╡ 1949c07a-a369-4e05-a93b-492e5419cacf
-function sample_action(model::Dict, s::Any)
-	haskey(model, s) ? rand(collect(keys(model[s]))) : nothing
-end
-
-# ╔═╡ b6adaba9-8634-4e8d-9672-ec2825b99167
-function sample_action(model::Array, s::Vector)
-	return rand(1:size(model)[end])
-end
-
-# ╔═╡ 50f59b5b-011c-4f7d-afc0-79f272edd089
-function q_planning_step!(Q, model::Dict; action=identity, α=1., γ=1.)
-	s = sample_state(model)
-	a = sample_action(model, s)
-	r, s′,finished = model[s][a]
-	q_learning_update!(Q, s, a, r, s′, finished; α=α, γ=γ)
-end
-
-# ╔═╡ 8fe6aa4a-5635-4184-9f14-f30f88285a6e
-function qplus_planning_step!(Q, model::Array; action=identity, α=1., γ=1., τ=nothing, t=nothing, k=0.01)
-	s = sample_state(model)
-	a = sample_action(model, s)
-	r, s′,finished = model[s...,a]
-	if ! (τ == nothing)
-		r += k*sqrt(t - τ[s...,a])
-	end
-	q_learning_update!(Q, s, a, r, s′, finished; α=α, γ=γ)
-end
-
-# ╔═╡ fefb4308-ac99-4953-94a4-61882216b71c
-md"### Example: Maze"
-
-# ╔═╡ a96ce5d6-b447-4d35-b6b8-462fffdd0fd8
+# ╔═╡ 2e5c82df-85f6-4092-88ba-c5768337f32b
 begin
-	mutable struct Maze <: AbstractEnv
-
-		height::Int
-		width::Int
-		start::Vector{Int}
-		goal::Vector{Int}
-		walls::Set
-		action
-		transition_reward::Float64
-		goal_reward::Float64
+	V_true = zeros(1000)
+	
+	while true
+		
+		delta = 0
+		for i = 1:length(V_true)
+			v_ = V_true[i]
+			V_true[i] = 0.5*mean(getindex_ext(V_true, i-100, i-1)) + 0.5*mean(mean(getindex_ext(V_true, i+1, i+100)))
+			(abs(v_ - V_true[i]) > delta) && (delta = abs(v_ - V_true[i]))
+		end
+		delta < 1e-5 && break
 	end
-	function (world::Maze)(state::Vector, a::Int)
+	plot(V_true, ylim=[-1,1], legend=false)
+end
+
+# ╔═╡ 940e5449-781e-4c54-ab3a-1fb54d631732
+begin
+	struct WindyGridworld <: AbstractEnv
+		height::Int64
+		width::Int64
+		wind::Vector
+		terminal_states::Set
+	end
+	function (world::WindyGridworld)(state::Vector, a::Vector)
 		y, x = state
 		
-		if (state == world.goal)
-			return 0, [y,x], true
+		if ((y,x) in world.terminal_states)
+			return 0, (y,x), true
 		end
-		
 		
 		m, n = world.height, world.width
 		
-		dy, dx = world.action(a)
+		(dy, dx) = a
 		
-		new_state = [clamp(y+dy, 1, m), clamp(x+dx, 1, n)]
+		x, y = clamp(x+dx, 1, n), clamp(y+dy+world.wind[x], 1, m)
 		
-		if new_state == world.goal
-			return world.goal_reward, world.start, true
-		elseif new_state in world.walls
-			return world.transition_reward, state, false
-		else
-			return world.transition_reward, new_state, false
-		end
+		return -1, [y,x], ([y,x] in world.terminal_states)
+		
 	end
 	
-	function draw(maze::Maze)
-		h,w = maze.height, maze.width
-		M = ones(h, w)
-		for (y,x) in maze.walls
-			M[y,x] = 0
-		end
-		p = heatmap(M, legend=:none)
-		anno = [
-			(maze.start[2], maze.start[1], text("S", color=:blue)),
-			(maze.goal[2],  maze.goal[1],  text("G", color=:green)),
-		]
-		annotate!(p, anno)
-		for i = 1:h
-			hline!(p, [i+0.5], colour=:grey)
-		end
-		for i = 1:w
-			vline!(p, [i+0.5], colour=:grey)
-		end
-		p
-	end
 end
 
-# ╔═╡ db2215af-e388-4717-a307-6ee11b2c7dcb
-begin
-	ga = [[0,-1],[0,1],[1,0],[-1,0]]
-	gridworld_action(a) = ga[a]
-end
+# ╔═╡ 79580401-dfe6-4f99-a28d-bf10084f058b
+md"## Gradient Monte Carlo Algorithm"
 
-# ╔═╡ 9bc3f073-ac91-4a9e-bf01-64bbb17b0b8e
-# transition and goal rewards for maze
-TR, GR = 0., 1.;
-
-# ╔═╡ d904cd7e-9954-43b7-881d-1c09585f4e3c
-let
-	d1, d2 = 6,9
-	walls = Set([[i, 3] for i=3:5])
-	union!(walls, [[2,6]], [[i,8] for i=4:6])
-	maze = Maze(d1,d2, [4,1], [d1,d2], walls, gridworld_action, TR, GR)
-	draw(maze)
-end
-
-# ╔═╡ dda7cd1c-023c-45af-a826-c2aacf4a63f7
-md"### Blocking Maze"
-
-# ╔═╡ 74fb0e46-6936-4f68-a6c0-6f3f559b722c
-let
-	maze = Maze(6,9, [1,4], [6,9], Set([[3, j] for j = 1:8]), gridworld_action, TR, GR)
-	draw(maze)
-end
-
-# ╔═╡ 2bf8bf98-1290-4063-908b-ae10619fd7da
-md"""
-Num planning steps $(@bind n1 Select([string(n) for n=5:5:50], default="20"))
-
-$(@bind run_blocking Button("Rerun"))
-"""
-
-# ╔═╡ 883b9a36-322d-4683-958d-03d6c7df1515
-md"""
-Num planning steps: $( @bind n2 Select([string(n) for n=5:5:50], default="20"))
-
-$(@bind run_shortcut Button("Rerun"))
-"""
-
-# ╔═╡ 2e884365-6df6-4bd1-9476-f5b44c36cbb8
-md"### Shortcut Maze"
-
-# ╔═╡ 2758a0ef-00c1-450a-ab64-05e64dd278e0
-md"## Trajectory Sampling"
-
-# ╔═╡ 324c78f9-4a08-4f73-8001-cbd19172d135
-begin
-	struct RandomEnv <: AbstractEnv
-		n::Int
-		b::Int
-		reward::Array
-		transition::Array
-		
-		function RandomEnv(n,b)
-			reward = randn(n,2,b)
-			transition = [rand(1:n) for i=1:n,j=1:2,k=1:b]
-			new(n,b,reward,transition)
-		end
-	end
+# ╔═╡ ba24dd89-0e49-48be-9846-ba2eb84cbc91
+function random_mrp_step(s::Int64)
+	a = (rand() < 0.5) ? rand(-100:-1) : rand(1:100)
 	
-	function (env::RandomEnv)(s,a)
-		if rand() < 0.1
-			return 0, 0, true
-		else
-			b = rand(1:env.b)
-			s′ = env.transition[s,a,b]
-			r = env.reward[s,a,b]
-			return r, s′, false
-		end
-	end
-end
-
-# ╔═╡ d11fea88-983f-46ce-8abe-b40062711ca4
-let 
-	env = RandomEnv(10,1)
-	history = []
-	finished = false
-	s = 1
-	while ! finished
-		r, s, finished = env(s,rand(1:2))
-		push!(history, (r=r, s=s))
-	end
-	history
-end
-
-# ╔═╡ ed35f996-f810-457a-b142-8fe89467759f
-function mc_evaluation(Q, env, s)
-	s0 = s
-	vs0 = 0
-	for i in 1:1000
-		s, finished = s0, false
-		tot = 0
-		while !(finished)
-			a = randargmax(Q[s, :])
-			r, s, finished = env(s, a)
-			tot += r
-		end
-		vs0 += (tot - vs0)/i
-	end
-	vs0
-end
-
-# ╔═╡ 712e2914-95fe-42e1-babb-e699a01f8d46
-function dp_evaluation(Q, env, s)
-	s_ = s
-	V = zeros(size(Q)[1])
-	delta = Inf
-	step = 0
-	while (delta > 1e-3) && step < 100
-		step += 1
-		delta = 0
-		for s = 1:env.n
-			v = V[s]
-			a = randargmax(Q[s, :])
-			sps = env.transition[s,a,:]
-			v′ = mean(V[sps])
-			V[s] = 0.9*(mean(env.reward[s,a,:]) + v′)
-			delta = max(delta, abs(v-V[s]))
-		end
-	end
-	V[s_]
-end
-
-# ╔═╡ b6a17640-99ca-4d43-80a2-16b6e6163306
-function evaluate(Q, env, s, method="mc")
-	if method == "mc"
-		return mc_evaluation(Q, env, s)
-	elseif method == "dp"
-		return dp_evaluation(Q, env, s)
+	s += a
+	if  s < 1
+		r = -1
+	elseif s > 1000
+		r = 1
 	else
-		throw("Method should be one of [dp, mc]")
+		r = 0
 	end
+	
+	a, r, s
 end
 
-# ╔═╡ 269bfdb6-1afd-4352-a158-7fd30ac78308
-let 
-	env = RandomEnv(10,1)
+# ╔═╡ 060db358-0093-46e2-aa05-8531fb7993d5
+function random_mrp()
+	s = 500
 	history = []
-	finished = false
-	s = 1
-	while ! finished
-		r, s, finished = env(s,rand(1:2))
-		push!(history, (r=r, s=s))
+	while 0 < s < 1001
+		a, r, s′ = random_mrp_step(s)
+		push!(history, (s=s, a=a, r=r))
+		s = s′
 	end
 	history
 end
 
-# ╔═╡ b0773508-b8ae-4870-9cdf-a5978e80c335
-function uniform_sampling(env)
-	n, b = env.n, env.b
-	Q = zeros(env.n, 2)
-	π = ones(size(Q)) ./ size(Q)[end]
-	value_estimates = [0.]
-	steps = [0]
-	step = 0
-	n_updates = env.n * 2 * 10
-	eval_step = n_updates ÷ 20
-	while step < n_updates
-		for s = 1:n, a = 1:2
-			step += 1
-			# r, s′, _ = env(s, a)
-			# sample update
-			# Q[s,a] = 0.9*(r + 0.9*maximum(Q[s′,:]))
-			# expected update
-			sps = env.transition[s,a,:]
-			q′ = mean(maximum(Q[sps, :], dims=2))
-			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + q′)
-			# update_policy!(π, Q, s; ε=0.)
-			if mod(step, eval_step) == 0
-				push!(value_estimates, evaluate(Q, env, 1, "mc"))
-				push!(steps, step)
-			end
+# ╔═╡ 536e5c0d-f266-4fc0-858d-4745d7e40460
+random_mrp()
+
+# ╔═╡ e10143d1-e45e-4cc8-86e6-2fa02472a077
+begin
+	nbin = 10
+	w = zeros(nbin)
+	
+	for i = 1:100000
+		history = random_mrp()
+		Gt = history[end][3]
+		for (s,a,r) = history
+			bin = (s-1) ÷ (1000÷nbin) + 1
+			w[bin] += 2e-5 * (Gt - w[bin])
 		end
+		
 	end
-	Q, value_estimates
+	
+	w
+	xs = vcat([[i, i+1] .* 100 for i=0:9]...)
+	ys = vcat([[w[i], w[i]] for i=1:10]...)
+	p = plot(V_true, legend=false, ylim=[-1, 1])
+	plot!(p, xs, ys)
 end
 
-# ╔═╡ d1aa7306-d5a3-4e73-957b-1e94bf0d1583
+# ╔═╡ b7b2a0c0-9970-4ad9-8711-80ff3f952070
+md"## Semi-gradient TD(0) Algorithm"
+
+# ╔═╡ cf6c95cc-2fff-40e2-89a7-ec84e7f1eb7b
 let
-	vs = []
-	for i = 1:10
-		env = RandomEnv(1000, 3)
-		push!(vs, uniform_sampling(env)[2])
-	end
-	plot(mean(vs, dims=1)[1])
-end
-
-# ╔═╡ 1768a69b-dafd-47c3-be23-98d6eb9fca9b
-function dp_update!(Q, s, a)
-	nothing
-end
-
-# ╔═╡ 657591f3-b4db-4a3e-a2a3-bd99e2599b34
-function trajectory_sampling(env; ε=0.1)
-	Q = zeros(env.n, 2)
-	π = ones(size(Q)) ./ size(Q)[end]
-	value_estimates = [0.]
-	steps = [0]
-	step = 0
-	# one episode is 10 updates in expectation
-	n_episodes = 2 * env.n
-	eval_step = n_episodes ÷ 20
-	for e = 1:n_episodes
-		s, finished = 1, false
+	nbin = 10
+	w = zeros(nbin)
+	
+	for i = 1:100000
+		
+		s = 500
+		finished = false
 		while !(finished)
-			step += 1
-			a = (rand() < ε) ? rand(1:2) : randargmax(Q[s, :])
-			r, s′, finished = env(s, a)
-			# sample update
-			# Q[s,a] = 0.9*(r + 0.9*maximum(Q[s′,:]))
-			# expected update
-			sps = env.transition[s,a,:]
-			q′ = mean(maximum(Q[sps, :], dims=2))
-			Q[s,a] = 0.9*(mean(env.reward[s,a,:]) + 0.9*q′)
+			a, r, s′ = random_mrp_step(s)
+			finished = !(0 < s′ < 1000)
+			
+			bin = (s-1) ÷ (1000÷nbin) + 1
+			bin′ = (s′-1) ÷ (1000÷nbin) + 1
+			v′ = (finished ? 0 : w[bin′])
+			w[bin] += 1e-4 * (r + v′ - w[bin])
 			s = s′
-			# update_policy!(π, Q, s; ε=0.)
 		end
-		if mod(e, eval_step) == 0
-			push!(value_estimates, evaluate(Q, env, 1, "mc"))
-			push!(steps, step)
-		end
+		
 	end
-	Q, value_estimates
-end
-
-# ╔═╡ 161456a4-a951-4075-9ab5-245303117eca
-let
-	vs = []
-	for _ = 1:10
-		env = RandomEnv(1000,3)
-		push!(vs, trajectory_sampling(env)[2])
-	end
-	plot(mean(vs, dims=1)[1])
-end
-
-# ╔═╡ 8d2b802e-345e-43d3-9bef-4354ebdaf82e
-function experiment_88(n::Int=1000, b::Int=1)
-	uniform_vs, trajectory_vs = [], []
 	
-	for i = 1:50
-		env = RandomEnv(n, b)
-		push!(uniform_vs, uniform_sampling(env)[2])
-		push!(trajectory_vs, trajectory_sampling(env)[2])
-	end
-	p = plot(title="b = $(b)")
-	p = plot!(p, mean(uniform_vs, dims=1)[1], label="uniform", legend=:bottomright)
-	plot!(p, mean(trajectory_vs, dims=1)[1], label="trajectory")
+	w
+	xs = vcat([[i, i+1] .* 100 for i=0:9]...)
+	ys = vcat([[w[i], w[i]] for i=1:10]...)
+	p = plot(V_true, legend=false, ylim=[-1, 1])
+	plot!(p, xs, ys)
 end
 
-# ╔═╡ 27bbfedf-7563-44e9-a623-25dedc7f1ef3
-experiment_88(1000, 1)
+# ╔═╡ 1f630d25-e13e-4749-b9ee-ad429d155591
+md"## n-step semi-gradient TD"
 
-# ╔═╡ ee888bfa-eb56-4e73-bcc4-7383beb1f631
-experiment_88(1000, 3)
-
-# ╔═╡ ac8393b6-f36c-4da3-9c78-6df9359109d4
-experiment_88(1000,10)
-
-# ╔═╡ 011c137d-0242-4404-9741-4c80ad574adc
-experiment_88(10_000, 1)
-
-# ╔═╡ 2c765608-6d5e-442d-949c-add9c3783dbf
-experiment_88(10_000, 3)
-
-# ╔═╡ e93dc2cb-f9dd-4a48-8380-1c31aae357e1
-let 
-	avg = 0
-	for i = 1:10000
+# ╔═╡ 143a24a1-045f-4b03-953b-dcb4146b16e3
+let
+	γ = 1
+	α = 1e-4
+	n = 4
+	nbin = 10
+	w = zeros(nbin)
+	S = Array{Int}(undef, n)
+	R = Array{Int}(undef, n)
+	for i = 1:100000
+		
+		s = 500
 		finished = false
-		tot = 0
-		while ! finished
-			if rand() < 0.1
-				finished = true
-			else
-				tot += maximum(randn(2))
+		T = Inf
+		t = 0
+		while true
+			t += 1
+			if t < T
+				a = rand(1:100)
+				(rand() < 0.5) && (a *= -1)
+				s′ = s+a
+
+				if s′ < 1
+					r = -1
+					finished = true
+				elseif s′ > 1000
+					r = 1
+					finished = true
+				else
+					r = 0
+				end
+				S[mod1(t,n)] = s′
+				R[mod1(t,n)] = r
+				finished && (T=t+1)
+				
+				s = s′
 			end
+			
+			τ = t - n + 1
+			if τ > 0
+				bin = (S[mod1(τ,n)]-1) ÷ (1000÷nbin) + 1
+				((S[mod1(τ,n)] < 1) || (S[mod1(τ,n)] > 999)) && break
+				G = sum([γ^(i-τ-1)*R[mod1(i, n)] for i = τ+1:Int(min(τ+n, T))])
+				(τ+n < T) && (G += γ^n * w[(s′-1) ÷ (1000÷nbin) + 1])
+				w[bin] += α * (G - w[bin])
+			end
+			(τ == T-1) && break
 		end
-		avg += (tot-avg)/i
-	end
-	avg
-end
-
-# ╔═╡ 6ee30e3f-d6cd-4950-8851-7f31967ad630
-# let
-# 	avgs = []
-# 	for _ in 1:1000
-# 		env = RandomEnv(1000, 1)
-# 		avg = 0
-# 		for i = 1:1000
-
-# 			finished = false
-# 			tot = 0
-# 			s = 1
-
-# 			while ! finished
-# 				r, s, finished = env(s, argmax(env.reward[s, :]))
-# 				tot += r
-# 			end
-# 			avg += (tot-avg)/i
-# 		end
-# 		push!(avgs, avg)
-# 	end
-# 	avgs, mean(avgs), std(avgs)
-# end
-
-# ╔═╡ e7406761-a290-476a-a8a3-68f3735a044c
-begin	
-	function onehot(i, n)
-		res = zeros(n)
-		res[i] = 1.
-		return res
-	end
-	
-	arrows = ["←", "→", "↑", "↓"]	
-	
-	function get_arrows(Q::Array)
-		m,n,_ = size(Q)
-		actions = [arrows[argmax(Q[i, j, :])] for i=1:m, j=1:n]
-	end
-	
-	function make_anno(M::Matrix; labels=nothing, c=:green)
-		m,n = size(M)
-		xs = repeat(1:n, m)
-		ys = [(i ÷ n)+1 for i=0:m*n-1]
-		if labels == nothing
-			vs = [round(M[i, j], digits=2) for (i, j) = zip(ys, xs)]
-		else
-			vs = [labels[i,j]  for (i, j) = zip(ys, xs)]
-		end
-
-		(xs, ys, vs, c)
-	end
-	
-	function annotated_heatmap(Q::Array, show_policy::Bool=false; kwargs...)
-		if show_policy
-			labels = get_arrows(Q)
-		else
-			labels=nothing
-		end
-		m,n,_ = size(Q)
-		V = [maximum(Q[i, j, :]) for i=1:m, j=1:n]
-		anno = make_anno(V, labels=labels)
-
-		p = plot(title="Value", yticks=:none, xticks=:none)
-		heatmap!(p, V, yflip=false, annotations=anno, kwargs...)
-	end
-	
-	function run_policy(π, env, start)
-		s = start
-		path = [s, ]
-		actions = []
-		finished = false
-		i = 0
-		while (! finished) && (i<100)
-			a = gridworld_action(argmax(π[s..., :]))
-			r, s, finished = env(s, a)
-			push!(path, s)
-			push!(actions, a)
-			i += 1
-		end
-		path, actions
-	end
-end
-
-# ╔═╡ 0b13943a-e871-4942-83d7-9df3cc5a5ed6
-function policy_update!(π, Q, s; ε=0.1)
-	na = size(π)[end]
-	if allequal(Q[s..., :])
-		π[s..., :] .= 1/na 
-	else
-		π[s..., :] = ((1-ε)*onehot(randargmax(Q[s..., :]), na) +
-					  ε .* ones(na) ./ na)
-	end
-end
-
-# ╔═╡ 347520cf-bede-47cc-a6fe-6f6f771161f6
-function dyna_q!(
-		Q::Array, 
-		π::Array,
-		env::AbstractEnv,
-		model::Dict,
-		s::Vector;
-		n::Int=50,
-		action=identity,
-		α::Float64=0.5,
-		ε::Float64=0.1,
-		γ::Float64=1.,
-		start=nothing,
-		max_steps=1000,
-		env_callback=identity
-	)
-	na = size(Q)[end]
-	
-	rewards = []
-	steps_per_episode = []
-	s = env.start
-	t = 0
-	last_terminal = 0
-	while true && (t < max_steps)
-		t += 1
-		# direct RL
-		#a = sample(1:na, ProbabilityWeights(π[s..., :]))
-		a = epsilon_greedy_action(Q, s, ε)
-		r, s′,finished = env(s, a)
-		q_learning_update!(Q,s,a,r,s′,finished; α=α, γ=γ)
-		policy_update!(π, Q, s; ε=ε)
-		model_update!(model, s, a, r, s′,finished)
-		s = s′
-		push!(rewards, r)
-		if finished
-			push!(steps_per_episode, t-last_terminal)
-			last_terminal = t
-		end
-		# planning
-		for _ = 1:n
-			q_planning_step!(Q, model; α=α, γ=γ)
-		end
-		if t == 1000
-			env_callback(env)
-		end
-	end
-	rewards, steps_per_episode
-end
-
-# ╔═╡ 9b190926-f617-434d-bcec-517951e3e3b3
-let
-	d1, d2 = 6,9
-	walls = Set()
-	union!(walls, [[i, 3] for i=3:5], [[2,6]], [[i,8] for i=4:6])
-	env = Maze(d1,d2, [4,1], [d1,d2], walls, gridworld_action, TR, GR)
-	
-	
-	# no planning
-	Q = zeros(d1,d2,4) # .+ 0.01
-	π = ones(size(Q)) / size(Q)[end]
-	model = Dict()
-	
-	rewards0, steps_per_episode0 = dyna_q!(Q, π, env, model, env.start; n=0, α=.1, γ=0.95, max_steps=5000)
-	
-	# n = 5
-	Q = zeros(d1,d2,4) #.+ 0.01
-	π = ones(size(Q)) / size(Q)[end]
-	model = Dict()
-	
-	rewards5, steps_per_episode5 = dyna_q!(Q, π, env, model, env.start; n=5, α=.1, γ=0.95, max_steps=5000)
-	
-	# n = 50
-	Q = zeros(d1,d2,4) #.+ 0.01
-	π = ones(size(Q)) / size(Q)[end]
-	model = Dict()
-	
-	rewards50, steps_per_episode50 = dyna_q!(Q, π, env, model, env.start; n=50, α=.1, γ=0.95, max_steps=5000)
-	
-	p = plot(ylabel="Steps per episode", xlabel="episode", xlims=(0,50), ylims=(0,850))
-	plot!(p, steps_per_episode0, label="No planning")
-	plot!(p, steps_per_episode5, label="n = 5")
-	plot!(p, steps_per_episode50, label="n = 50")
-end
-
-# ╔═╡ cc5476f7-3f51-4eb0-bdc2-c7855c70ed5a
-function dyna_qp!(
-		Q::Array, 
-		π::Array,
-		env::AbstractEnv,
-		model::Array,
-		s::Vector;
-		n::Int=50,
-		action=identity,
-		α::Float64=0.5,
-		ε::Float64=0.1,
-		γ::Float64=1.,
-		k::Float64=1e-3,
-		start=nothing,
-		max_steps=1000,
-		env_callback=identity,
-	)
-	na = size(Q)[end]
-	
-	rewards = []
-	steps_per_episode = []
-	s = env.start
-	t = 0
-	last_terminal = 0
-	τ = zeros(size(Q))
-	while true && (t < max_steps)
-		t += 1
-		# direct RL
-		# a = sample(1:na, ProbabilityWeights(π[s..., :]))
-		a = epsilon_greedy_action(Q, s, ε)
-		τ[s...,a] = t
-		r, s′,finished = env(s, a)
-		q_learning_update!(Q,s,a,r,s′,finished; α=α, γ=γ)
-		policy_update!(π, Q, s; ε=ε)
-		model_update!(model, s, a, r, s′,finished)
-		s = s′
-		push!(rewards, r)
-		if finished
-			push!(steps_per_episode, t-last_terminal)
-			last_terminal = t
-		end
-		# planning
-		for _ = 1:n
-			qplus_planning_step!(Q, model; α=α, γ=γ, τ=τ, t=t, k=k)
-		end
-		if t == 1000
-			env_callback(env)
-		end
-	end
-	rewards, steps_per_episode
-end
-
-# ╔═╡ 305bab1b-1d01-4e63-b733-bf953c4734cc
-let
-	run_blocking
-	# hypers
-	n = parse(Int, n1)
-	α = .5
-	γ = 0.95
-	k = 1e-3
-	# env
-	d1, d2 = 6,9
-	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 1:d2-1]), gridworld_action, TR, GR)
-	function block!(env)
-		pop!(env.walls, [3,1])
-		push!(env.walls, [3,d2])
-	end
-	# dyna-Q
-	model = Dict()
-	Q = zeros(d1,d2,4)
-	π = ones(size(Q)) / size(Q)[end]
-	
-	rewards1, steps_per_episode1 = dyna_q!(Q, π, env, model, env.start; n=n, α=1., γ=0.95, max_steps=3000, env_callback=block!)
-	
-	# dyna-Q+
-	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 1:d2-1]), gridworld_action, TR, GR)
-	model = [(0, [i,j],false) for i=1:d1, j=1:d2, a=1:4]
-	Q = zeros(d1,d2,4)
-	π = ones(size(Q)) / size(Q)[end]
-	
-	rewards2, steps_per_episode2 = dyna_qp!(Q,π,env,model,env.start; n=n, α=α,γ=γ,k=k, max_steps=3000, env_callback=block!)
-	
-	p1 = plot(steps_per_episode1, label="Dyna-Q", ylabel="Steps per episode", xlabel="episode")
-	plot!(p1, steps_per_episode2, label="Dyna-Q+")
-	
-	p2 = plot(cumsum(rewards1), label="Dyna-Q", legend=:bottomright, ylabel="Cumulative reward", xlabel="step")
-	plot!(p2, cumsum(rewards2), label="Dyna-Q+")
-	
-	plot(p1,p2, layout=(2,1))
-end
-
-# ╔═╡ 522c4458-dd9b-4ff2-80ee-163a105d8a67
-let
-	run_shortcut
-	# hypers
-	n = parse(Int, n2)
-	α = .5
-	γ = 0.95
-	k = 1e-3
-	# env
-	d1, d2 = 6,9
-	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 2:d2]), gridworld_action, TR, GR)
-	function shortcut!(env)
-		pop!(env.walls, [3,d2])
-	end
-	# dyna-Q
-	model = Dict()
-	Q = zeros(d1,d2,4) .+ 1. 
-	π = ones(size(Q)) / size(Q)[end]
-	
-	rewards1, steps_per_episode1 = dyna_q!(Q, π, env, model, env.start; n=n, α=α, γ=γ, max_steps=3000, env_callback=shortcut!)
-	
-	# dyna-Q+
-	env = Maze(d1,d2, [1,4], [6,d2], Set([[3, j] for j = 2:d2]), gridworld_action, TR, GR)
-	model = [(0, [i,j],false) for i=1:d1, j=1:d2, a=1:4]
-	Q = zeros(d1,d2,4) .+ 1. 
-	π = ones(size(Q)) / size(Q)[end]
-	
-	rewards2, steps_per_episode2 = dyna_qp!(Q,π,env,model,env.start; n=n, α=α,γ=γ,k=k, max_steps=3000, env_callback=shortcut!)
-	
-	p1 = plot(steps_per_episode1, label="Dyna-Q", ylabel="Steps per episode", xlabel="episode", ylim=(0,100))
-	plot!(p1, steps_per_episode2, label="Dyna-Q+")
-	
-	p2 = plot(cumsum(rewards1), label="Dyna-Q", legend=:bottomright, ylabel="Cumulative reward", xlabel="step")
-	plot!(p2, cumsum(rewards2), label="Dyna-Q+")
-	
-	plot(p1,p2, layout=(2,1))
-end
-
-# ╔═╡ 085ac6f6-6f50-4ac9-95a2-2a27176774cc
-function ql_step!(
-		Q::Array, 
-		π::Array,
-		env::AbstractEnv,
-		s::Vector;
-		action=identity,
-		α::Float64=0.5,
-		ε::Float64=0.1,
-		γ::Float64=1.,
-		start=nothing,
-		max_steps=1000
-	)
-	
-	m, n = env.height, env.width
-	na = size(Q)[end]
-	a = sample(1:na, ProbabilityWeights(π[s..., :]))
-	
-	r, s′, finished = env(s, a)
 		
-	Q′ = (finished ? 0 : maximum(Q[s′..., :]))
-	Q[sa2idx(s,a)...] += α * (r + γ*Q′ - Q[sa2idx(s,a)...])
-		
-	#ε-greedy policy based on Q
-	π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
-				  ε .* ones(na) ./ na)
-		
-	s = s′
+	end
 	
-	h = (n=j, r = total_reward)
-	return Q, π, h
+	xs = vcat([[i, i+1] .* 100 for i=0:9]...)
+	ys = vcat([[w[i], w[i]] for i=1:10]...)
+	p = plot(V_true, legend=false, ylim=[-1, 1])
+	plot!(p, xs, ys)
 end
 
-# ╔═╡ 83e3dc6b-3266-4f19-9f65-1635112ec800
-function update_policy!(π, Q, s; ε=0.1)
-	na = size(π)[end]
-	π[s..., :] = ((1-ε)*onehot(argmax(Q[s..., :]), na) +
-				  ε .* ones(na) ./ na)
-end
-
-# ╔═╡ 706c2093-1554-45d0-8774-ab6651257671
-md"fin"
-
-# ╔═╡ 5873ab3e-db69-441b-bcfd-b698f9956096
-TableOfContents()
+# ╔═╡ 6487e99f-12a3-46c7-a9d5-2de1ac408813
+md"TBC..."
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
-Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
@@ -844,10 +242,10 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
-Distributions = "~0.25.11"
-Plots = "~1.20.1"
-PlutoUI = "~0.7.9"
-StatsBase = "~0.33.9"
+Distributions = "~0.25.17"
+Plots = "~1.22.3"
+PlutoUI = "~0.7.14"
+StatsBase = "~0.33.10"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -871,27 +269,27 @@ uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
 [[Bzip2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "c3598e525718abcc440f69cc6d5f60dda0a1b61e"
+git-tree-sha1 = "19a35467a82e236ff51bc17a3a44b69ef35185a2"
 uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
-version = "1.0.6+5"
+version = "1.0.8+0"
 
 [[Cairo_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "JLLWrappers", "LZO_jll", "Libdl", "Pixman_jll", "Pkg", "Xorg_libXext_jll", "Xorg_libXrender_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "e2f47f6d8337369411569fd45ae5753ca10394c6"
+git-tree-sha1 = "f2202b55d816427cd385a9a4f3ffb226bee80f99"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
-version = "1.16.0+6"
+version = "1.16.1+0"
 
 [[ChainRulesCore]]
 deps = ["Compat", "LinearAlgebra", "SparseArrays"]
-git-tree-sha1 = "bdc0937269321858ab2a4f288486cb258b9a0af7"
+git-tree-sha1 = "1417269aa4238b85967827f11f3e0ce5722b7bf0"
 uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-version = "1.3.0"
+version = "1.7.1"
 
 [[ColorSchemes]]
 deps = ["ColorTypes", "Colors", "FixedPointNumbers", "Random"]
-git-tree-sha1 = "9995eb3977fbf67b86d0a0a0508e83017ded03f2"
+git-tree-sha1 = "a851fec56cb73cfdf43762999ec72eff5b86882a"
 uuid = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
-version = "3.14.0"
+version = "3.15.0"
 
 [[ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
@@ -907,9 +305,9 @@ version = "0.12.8"
 
 [[Compat]]
 deps = ["Base64", "Dates", "DelimitedFiles", "Distributed", "InteractiveUtils", "LibGit2", "Libdl", "LinearAlgebra", "Markdown", "Mmap", "Pkg", "Printf", "REPL", "Random", "SHA", "Serialization", "SharedArrays", "Sockets", "SparseArrays", "Statistics", "Test", "UUIDs", "Unicode"]
-git-tree-sha1 = "344f143fa0ec67e47917848795ab19c6a455f32c"
+git-tree-sha1 = "31d0151f5716b655421d9d75b7fa74cc4e744df2"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "3.32.0"
+version = "3.39.0"
 
 [[CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -922,9 +320,9 @@ uuid = "d38c429a-6771-53c6-b99e-75d170b6e991"
 version = "0.5.7"
 
 [[DataAPI]]
-git-tree-sha1 = "ee400abb2298bd13bfc3df1c412ed228061a2385"
+git-tree-sha1 = "cc70b17275652eb47bc9e5f81635981f13cea5c8"
 uuid = "9a962f9c-6df0-11e9-0e5d-c546b8b5ee8a"
-version = "1.7.0"
+version = "1.9.0"
 
 [[DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
@@ -950,10 +348,10 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
 [[Distributions]]
-deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns"]
-git-tree-sha1 = "3889f646423ce91dd1055a76317e9a1d3a23fff1"
+deps = ["ChainRulesCore", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns"]
+git-tree-sha1 = "a9b99024b57d12fb19892d3f2230856f6d9671a4"
 uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
-version = "0.25.11"
+version = "0.25.17"
 
 [[DocStringExtensions]]
 deps = ["LibGit2"]
@@ -967,9 +365,9 @@ uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 
 [[EarCut_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "92d8f9f208637e8d2d28c664051a00569c01493d"
+git-tree-sha1 = "3f3a2501fa7236e9b911e0f7a588c657e822bb6d"
 uuid = "5ae413db-bbd1-5e63-b57d-d24a61df00f5"
-version = "2.1.5+1"
+version = "2.2.3+0"
 
 [[Expat_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -984,16 +382,16 @@ uuid = "c87230d0-a227-11e9-1b43-d7ebe4e7570a"
 version = "0.4.1"
 
 [[FFMPEG_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "LibVPX_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "Pkg", "Zlib_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
-git-tree-sha1 = "3cc57ad0a213808473eafef4845a74766242e05f"
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "LAME_jll", "Libdl", "Ogg_jll", "OpenSSL_jll", "Opus_jll", "Pkg", "Zlib_jll", "libass_jll", "libfdk_aac_jll", "libvorbis_jll", "x264_jll", "x265_jll"]
+git-tree-sha1 = "d8a578692e3077ac998b50c0217dfd67f21d1e5f"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
-version = "4.3.1+4"
+version = "4.4.0+0"
 
 [[FillArrays]]
 deps = ["LinearAlgebra", "Random", "SparseArrays", "Statistics"]
-git-tree-sha1 = "8c8eac2af06ce35973c3eadb4ab3243076a408e7"
+git-tree-sha1 = "29890dfbc427afa59598b8cfcc10034719bd7744"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
-version = "0.12.1"
+version = "0.12.6"
 
 [[FixedPointNumbers]]
 deps = ["Statistics"]
@@ -1003,9 +401,9 @@ version = "0.8.4"
 
 [[Fontconfig_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Expat_jll", "FreeType2_jll", "JLLWrappers", "Libdl", "Libuuid_jll", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "35895cf184ceaab11fd778b4590144034a167a2f"
+git-tree-sha1 = "21efd19106a55620a188615da6d3d06cd7f6ee03"
 uuid = "a3f928ae-7b40-5064-980b-68af3947d34b"
-version = "2.13.1+14"
+version = "2.13.93+0"
 
 [[Formatting]]
 deps = ["Printf"]
@@ -1015,9 +413,9 @@ version = "0.4.2"
 
 [[FreeType2_jll]]
 deps = ["Artifacts", "Bzip2_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "cbd58c9deb1d304f5a245a0b7eb841a2560cfec6"
+git-tree-sha1 = "87eb71354d8ec1a96d4a7636bd57a7347dde3ef9"
 uuid = "d7e528f0-a631-5988-bf34-fe36492bcfd7"
-version = "2.10.1+5"
+version = "2.10.4+0"
 
 [[FriBidi_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1033,15 +431,15 @@ version = "3.3.5+0"
 
 [[GR]]
 deps = ["Base64", "DelimitedFiles", "GR_jll", "HTTP", "JSON", "Libdl", "LinearAlgebra", "Pkg", "Printf", "Random", "Serialization", "Sockets", "Test", "UUIDs"]
-git-tree-sha1 = "182da592436e287758ded5be6e32c406de3a2e47"
+git-tree-sha1 = "c2178cfbc0a5a552e16d097fae508f2024de61a3"
 uuid = "28b8d3ca-fb5f-59d9-8090-bfdbd6d07a71"
-version = "0.58.1"
+version = "0.59.0"
 
 [[GR_jll]]
 deps = ["Artifacts", "Bzip2_jll", "Cairo_jll", "FFMPEG_jll", "Fontconfig_jll", "GLFW_jll", "JLLWrappers", "JpegTurbo_jll", "Libdl", "Libtiff_jll", "Pixman_jll", "Pkg", "Qt5Base_jll", "Zlib_jll", "libpng_jll"]
-git-tree-sha1 = "d59e8320c2747553788e4fc42231489cc602fa50"
+git-tree-sha1 = "ef49a187604f865f4708c90e3f431890724e9012"
 uuid = "d2c73de3-f751-5644-a686-071e5b155ba9"
-version = "0.58.1+0"
+version = "0.59.0+0"
 
 [[GeometryBasics]]
 deps = ["EarCut_jll", "IterTools", "LinearAlgebra", "StaticArrays", "StructArrays", "Tables"]
@@ -1061,6 +459,12 @@ git-tree-sha1 = "7bf67e9a481712b3dbe9cb3dac852dc4b1162e02"
 uuid = "7746bdde-850d-59dc-9ae8-88ece973131d"
 version = "2.68.3+0"
 
+[[Graphite2_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "344bf40dcab1073aca04aa0df4fb092f920e4011"
+uuid = "3b182d85-2403-5c21-9c21-1e1f0cc25472"
+version = "1.3.14+0"
+
 [[Grisu]]
 git-tree-sha1 = "53bb909d1151e57e2484c3d1b53e19552b887fb2"
 uuid = "42e2da0e-8278-4e71-bc24-59509adca0fe"
@@ -1068,9 +472,26 @@ version = "1.0.2"
 
 [[HTTP]]
 deps = ["Base64", "Dates", "IniFile", "Logging", "MbedTLS", "NetworkOptions", "Sockets", "URIs"]
-git-tree-sha1 = "44e3b40da000eab4ccb1aecdc4801c040026aeb5"
+git-tree-sha1 = "14eece7a3308b4d8be910e265c724a6ba51a9798"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-version = "0.9.13"
+version = "0.9.16"
+
+[[HarfBuzz_jll]]
+deps = ["Artifacts", "Cairo_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll", "Graphite2_jll", "JLLWrappers", "Libdl", "Libffi_jll", "Pkg"]
+git-tree-sha1 = "8a954fed8ac097d5be04921d595f741115c1b2ad"
+uuid = "2e76f6c2-a576-52d4-95c1-20adfe4de566"
+version = "2.8.1+0"
+
+[[HypertextLiteral]]
+git-tree-sha1 = "72053798e1be56026b81d4e2682dbe58922e5ec9"
+uuid = "ac1192a8-f4b3-4bfe-ba22-af5b92cd3ab2"
+version = "0.9.0"
+
+[[IOCapture]]
+deps = ["Logging", "Random"]
+git-tree-sha1 = "f7be53659ab06ddc986428d3a9dcc95f6fa6705a"
+uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
+version = "0.2.2"
 
 [[IniFile]]
 deps = ["Test"]
@@ -1154,12 +575,6 @@ uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
 deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
 
-[[LibVPX_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "12ee7e23fa4d18361e7c2cde8f8337d4c3101bc7"
-uuid = "dd192d2f-8180-539f-9fb4-cc70b1dcf69a"
-version = "1.10.0+0"
-
 [[Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
@@ -1216,19 +631,19 @@ deps = ["Libdl"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[LogExpFunctions]]
-deps = ["DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
-git-tree-sha1 = "3d682c07e6dd250ed082f883dc88aee7996bf2cc"
+deps = ["ChainRulesCore", "DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
+git-tree-sha1 = "34dc30f868e368f8a17b728a1238f3fcda43931a"
 uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
-version = "0.3.0"
+version = "0.3.3"
 
 [[Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [[MacroTools]]
 deps = ["Markdown", "Random"]
-git-tree-sha1 = "0fb723cd8c45858c22169b2e42269e53271a6df7"
+git-tree-sha1 = "5a5bc6bf062f0f95e62d0fe0a2d99699fed82dd9"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-version = "0.5.7"
+version = "0.5.8"
 
 [[Markdown]]
 deps = ["Base64"]
@@ -1251,9 +666,9 @@ version = "0.3.1"
 
 [[Missings]]
 deps = ["DataAPI"]
-git-tree-sha1 = "4ea90bd5d3985ae1f9a908bd4500ae88921c5ce7"
+git-tree-sha1 = "bf210ce90b6c9eed32d25dbcae1ebc565df2687f"
 uuid = "e1d29d7a-bbdc-5cf2-9ac0-f12de2c33e28"
-version = "1.0.0"
+version = "1.0.2"
 
 [[Mmap]]
 uuid = "a63ad114-7e13-5084-954f-fe012c677804"
@@ -1274,6 +689,10 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "7937eda4681660b4d6aeeecc2f7e1c81c8ee4e2f"
 uuid = "e7412a2a-1a6e-54c0-be00-318e2571c051"
 version = "1.3.5+0"
+
+[[OpenLibm_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
 
 [[OpenSSL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1312,9 +731,9 @@ version = "0.11.1"
 
 [[Parsers]]
 deps = ["Dates"]
-git-tree-sha1 = "477bf42b4d1496b454c10cce46645bb5b8a0cf2c"
+git-tree-sha1 = "a8709b968a1ea6abc2dc1967cb1db6ac9a00dfb6"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.0.2"
+version = "2.0.5"
 
 [[Pixman_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1334,21 +753,21 @@ version = "2.0.1"
 
 [[PlotUtils]]
 deps = ["ColorSchemes", "Colors", "Dates", "Printf", "Random", "Reexport", "Statistics"]
-git-tree-sha1 = "501c20a63a34ac1d015d5304da0e645f42d91c9f"
+git-tree-sha1 = "2537ed3c0ed5e03896927187f5f2ee6a4ab342db"
 uuid = "995b91a9-d308-5afd-9ec6-746e21dbc043"
-version = "1.0.11"
+version = "1.0.14"
 
 [[Plots]]
-deps = ["Base64", "Contour", "Dates", "FFMPEG", "FixedPointNumbers", "GR", "GeometryBasics", "JSON", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "PlotThemes", "PlotUtils", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs"]
-git-tree-sha1 = "8365fa7758e2e8e4443ce866d6106d8ecbb4474e"
+deps = ["Base64", "Contour", "Dates", "Downloads", "FFMPEG", "FixedPointNumbers", "GR", "GeometryBasics", "JSON", "Latexify", "LinearAlgebra", "Measures", "NaNMath", "PlotThemes", "PlotUtils", "Printf", "REPL", "Random", "RecipesBase", "RecipesPipeline", "Reexport", "Requires", "Scratch", "Showoff", "SparseArrays", "Statistics", "StatsBase", "UUIDs"]
+git-tree-sha1 = "cfbd033def161db9494f86c5d18fbf874e09e514"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
-version = "1.20.1"
+version = "1.22.3"
 
 [[PlutoUI]]
-deps = ["Base64", "Dates", "InteractiveUtils", "JSON", "Logging", "Markdown", "Random", "Reexport", "Suppressor"]
-git-tree-sha1 = "44e225d5837e2a2345e69a1d1e01ac2443ff9fcb"
+deps = ["Base64", "Dates", "HypertextLiteral", "IOCapture", "InteractiveUtils", "JSON", "Logging", "Markdown", "Random", "Reexport", "UUIDs"]
+git-tree-sha1 = "d1fb76655a95bf6ea4348d7197b22e889a4375f4"
 uuid = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-version = "0.7.9"
+version = "0.7.14"
 
 [[Preferences]]
 deps = ["TOML"]
@@ -1368,9 +787,9 @@ version = "5.15.3+0"
 
 [[QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "12fbe86da16df6679be7521dfb39fbc861e1dc7b"
+git-tree-sha1 = "78aadffb3efd2155af139781b8a8df1ef279ea39"
 uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.4.1"
+version = "2.4.2"
 
 [[REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
@@ -1381,20 +800,20 @@ deps = ["Serialization"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [[RecipesBase]]
-git-tree-sha1 = "b3fb709f3c97bfc6e948be68beeecb55a0b340ae"
+git-tree-sha1 = "44a75aa7a527910ee3d1751d1f0e4148698add9e"
 uuid = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
-version = "1.1.1"
+version = "1.1.2"
 
 [[RecipesPipeline]]
 deps = ["Dates", "NaNMath", "PlotUtils", "RecipesBase"]
-git-tree-sha1 = "2a7a2469ed5d94a98dea0e85c46fa653d76be0cd"
+git-tree-sha1 = "7ad0dfa8d03b7bcf8c597f59f5292801730c55b8"
 uuid = "01d81517-befc-4cb6-b9ec-a95719d0359c"
-version = "0.3.4"
+version = "0.4.1"
 
 [[Reexport]]
-git-tree-sha1 = "5f6c21241f0f655da3952fd60aa18477cf96c220"
+git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
 uuid = "189a3867-3050-52da-a836-e630ba90ab69"
-version = "1.1.0"
+version = "1.2.2"
 
 [[Requires]]
 deps = ["UUIDs"]
@@ -1450,16 +869,16 @@ deps = ["LinearAlgebra", "Random"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [[SpecialFunctions]]
-deps = ["ChainRulesCore", "LogExpFunctions", "OpenSpecFun_jll"]
-git-tree-sha1 = "a322a9493e49c5f3a10b50df3aedaf1cdb3244b7"
+deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
+git-tree-sha1 = "793793f1df98e3d7d554b65a107e9c9a6399a6ed"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
-version = "1.6.1"
+version = "1.7.0"
 
 [[StaticArrays]]
 deps = ["LinearAlgebra", "Random", "Statistics"]
-git-tree-sha1 = "3240808c6d463ac46f1c1cd7638375cd22abbccb"
+git-tree-sha1 = "3c76dde64d03699e074ac02eb2e8ba8254d428da"
 uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.2.12"
+version = "1.2.13"
 
 [[Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
@@ -1472,30 +891,25 @@ version = "1.0.0"
 
 [[StatsBase]]
 deps = ["DataAPI", "DataStructures", "LinearAlgebra", "Missings", "Printf", "Random", "SortingAlgorithms", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "fed1ec1e65749c4d96fc20dd13bea72b55457e62"
+git-tree-sha1 = "8cbbc098554648c84f79a463c9ff0fd277144b6c"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-version = "0.33.9"
+version = "0.33.10"
 
 [[StatsFuns]]
-deps = ["IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "20d1bb720b9b27636280f751746ba4abb465f19d"
+deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
+git-tree-sha1 = "95072ef1a22b057b1e80f73c2a89ad238ae4cfff"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "0.9.9"
+version = "0.9.12"
 
 [[StructArrays]]
 deps = ["Adapt", "DataAPI", "StaticArrays", "Tables"]
-git-tree-sha1 = "000e168f5cc9aded17b6999a560b7c11dda69095"
+git-tree-sha1 = "2ce41e0d042c60ecd131e9fb7154a3bfadbf50d3"
 uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
-version = "0.6.0"
+version = "0.6.3"
 
 [[SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
 uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
-
-[[Suppressor]]
-git-tree-sha1 = "a819d77f31f83e5792a76081eee1ea6342ab8787"
-uuid = "fd094767-a336-5f1f-9728-57cf17d0bbfb"
-version = "0.2.0"
 
 [[TOML]]
 deps = ["Dates"]
@@ -1509,9 +923,9 @@ version = "1.0.1"
 
 [[Tables]]
 deps = ["DataAPI", "DataValueInterfaces", "IteratorInterfaceExtensions", "LinearAlgebra", "TableTraits", "Test"]
-git-tree-sha1 = "d0c690d37c73aeb5ca063056283fde5585a41710"
+git-tree-sha1 = "1162ce4a6c4b7e31e0e6b14486a6986951c73be9"
 uuid = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
-version = "1.5.0"
+version = "1.5.2"
 
 [[Tar]]
 deps = ["ArgTools", "SHA"]
@@ -1694,16 +1108,16 @@ uuid = "3161d3a3-bdf6-5164-811a-617609db77b4"
 version = "1.5.0+0"
 
 [[libass_jll]]
-deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
-git-tree-sha1 = "acc685bcf777b2202a904cdcb49ad34c2fa1880c"
+deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "HarfBuzz_jll", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
+git-tree-sha1 = "5982a94fcba20f02f42ace44b9894ee2b140fe47"
 uuid = "0ac62f75-1d6f-5e53-bd7c-93b484bb37c0"
-version = "0.14.0+4"
+version = "0.15.1+0"
 
 [[libfdk_aac_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "7a5780a0d9c6864184b3a2eeeb833a0c871f00ab"
+git-tree-sha1 = "daacc84a041563f965be61859a36e17c4e4fcd55"
 uuid = "f638f0a6-7fb0-5443-88ba-1cc74229b280"
-version = "0.1.6+4"
+version = "2.0.2+0"
 
 [[libpng_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Zlib_jll"]
@@ -1727,15 +1141,15 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 
 [[x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "d713c1ce4deac133e3334ee12f4adff07f81778f"
+git-tree-sha1 = "4fea590b89e6ec504593146bf8b988b2c00922b2"
 uuid = "1270edf5-f2f9-52d2-97e9-ab00b5d0237a"
-version = "2020.7.14+2"
+version = "2021.5.5+0"
 
 [[x265_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "487da2f8f2f0c8ee0e83f39d13037d6bbf0a45ab"
+git-tree-sha1 = "ee567a171cce03570d77ad3a43e90218e38937a9"
 uuid = "dfaa095f-4041-5dcd-9319-2fabd8486b76"
-version = "3.0.0+3"
+version = "3.5.0+0"
 
 [[xkbcommon_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg", "Wayland_jll", "Wayland_protocols_jll", "Xorg_libxcb_jll", "Xorg_xkeyboard_config_jll"]
@@ -1745,64 +1159,22 @@ version = "0.9.1+5"
 """
 
 # ╔═╡ Cell order:
-# ╟─6237ba02-fc65-11eb-2329-e910205453e1
-# ╟─bc4ccc14-94d6-4313-819d-db4b37d36915
-# ╟─1d37f4f9-13c3-4478-b3a6-7f157b3a24bf
-# ╟─32b6eba3-b511-447d-984e-5e5ca063028e
-# ╟─9fd51969-7a5a-4bbb-92de-6d23152c260d
-# ╟─c699d0f5-5c5f-40d8-a5b6-ab573c147ebd
-# ╟─ce51339c-70cd-4605-af45-15e2a0d117d8
-# ╠═56733988-c9a7-4cc9-9b16-2bea856f8f25
-# ╠═28ec1ed2-a589-408b-9b7e-6a369606cfc1
-# ╠═0df92799-cde8-4322-ab6d-23ee67bf93e8
-# ╠═0b13943a-e871-4942-83d7-9df3cc5a5ed6
-# ╟─9ff10658-ea2d-4f9d-b523-723e35f2c44f
-# ╟─c3098dcf-ff10-4034-a127-59d02e7c76d1
-# ╟─73cfa852-ae33-4138-b56d-ef131c885485
-# ╟─69e21e6c-1b06-4b96-82b9-cc402727dd55
-# ╟─1949c07a-a369-4e05-a93b-492e5419cacf
-# ╟─b6adaba9-8634-4e8d-9672-ec2825b99167
-# ╠═50f59b5b-011c-4f7d-afc0-79f272edd089
-# ╠═8fe6aa4a-5635-4184-9f14-f30f88285a6e
-# ╠═347520cf-bede-47cc-a6fe-6f6f771161f6
-# ╟─fefb4308-ac99-4953-94a4-61882216b71c
-# ╠═a96ce5d6-b447-4d35-b6b8-462fffdd0fd8
-# ╟─db2215af-e388-4717-a307-6ee11b2c7dcb
-# ╟─085ac6f6-6f50-4ac9-95a2-2a27176774cc
-# ╠═9bc3f073-ac91-4a9e-bf01-64bbb17b0b8e
-# ╠═d904cd7e-9954-43b7-881d-1c09585f4e3c
-# ╠═9b190926-f617-434d-bcec-517951e3e3b3
-# ╟─dda7cd1c-023c-45af-a826-c2aacf4a63f7
-# ╠═74fb0e46-6936-4f68-a6c0-6f3f559b722c
-# ╟─2bf8bf98-1290-4063-908b-ae10619fd7da
-# ╠═305bab1b-1d01-4e63-b733-bf953c4734cc
-# ╠═cc5476f7-3f51-4eb0-bdc2-c7855c70ed5a
-# ╟─2e884365-6df6-4bd1-9476-f5b44c36cbb8
-# ╟─883b9a36-322d-4683-958d-03d6c7df1515
-# ╠═522c4458-dd9b-4ff2-80ee-163a105d8a67
-# ╟─2758a0ef-00c1-450a-ab64-05e64dd278e0
-# ╠═324c78f9-4a08-4f73-8001-cbd19172d135
-# ╠═d11fea88-983f-46ce-8abe-b40062711ca4
-# ╠═ed35f996-f810-457a-b142-8fe89467759f
-# ╟─712e2914-95fe-42e1-babb-e699a01f8d46
-# ╠═b6a17640-99ca-4d43-80a2-16b6e6163306
-# ╠═269bfdb6-1afd-4352-a158-7fd30ac78308
-# ╠═b0773508-b8ae-4870-9cdf-a5978e80c335
-# ╠═d1aa7306-d5a3-4e73-957b-1e94bf0d1583
-# ╠═1768a69b-dafd-47c3-be23-98d6eb9fca9b
-# ╠═657591f3-b4db-4a3e-a2a3-bd99e2599b34
-# ╠═161456a4-a951-4075-9ab5-245303117eca
-# ╠═8d2b802e-345e-43d3-9bef-4354ebdaf82e
-# ╠═27bbfedf-7563-44e9-a623-25dedc7f1ef3
-# ╠═ee888bfa-eb56-4e73-bcc4-7383beb1f631
-# ╠═ac8393b6-f36c-4da3-9c78-6df9359109d4
-# ╠═011c137d-0242-4404-9741-4c80ad574adc
-# ╠═2c765608-6d5e-442d-949c-add9c3783dbf
-# ╠═e93dc2cb-f9dd-4a48-8380-1c31aae357e1
-# ╠═6ee30e3f-d6cd-4950-8851-7f31967ad630
-# ╟─83e3dc6b-3266-4f19-9f65-1635112ec800
-# ╟─e7406761-a290-476a-a8a3-68f3735a044c
-# ╟─706c2093-1554-45d0-8774-ab6651257671
-# ╟─5873ab3e-db69-441b-bcfd-b698f9956096
+# ╟─da640d6a-244b-11ec-1105-95f4ef08195d
+# ╟─e5dfefbd-793d-4bfb-a88e-9da7e7c4027f
+# ╟─17d67fde-7b90-4633-9eb2-877e2e4e2702
+# ╟─020ade6d-2a0c-44af-96b8-fc843e8fafbd
+# ╠═2e5c82df-85f6-4092-88ba-c5768337f32b
+# ╠═ed0b0d7a-2be0-42ec-99b0-e893ca95b4f2
+# ╠═940e5449-781e-4c54-ab3a-1fb54d631732
+# ╟─79580401-dfe6-4f99-a28d-bf10084f058b
+# ╠═ba24dd89-0e49-48be-9846-ba2eb84cbc91
+# ╠═060db358-0093-46e2-aa05-8531fb7993d5
+# ╠═536e5c0d-f266-4fc0-858d-4745d7e40460
+# ╠═e10143d1-e45e-4cc8-86e6-2fa02472a077
+# ╟─b7b2a0c0-9970-4ad9-8711-80ff3f952070
+# ╠═cf6c95cc-2fff-40e2-89a7-ec84e7f1eb7b
+# ╟─1f630d25-e13e-4749-b9ee-ad429d155591
+# ╠═143a24a1-045f-4b03-953b-dcb4146b16e3
+# ╟─6487e99f-12a3-46c7-a9d5-2de1ac408813
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
