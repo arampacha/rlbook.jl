@@ -4,206 +4,467 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ da640d6a-244b-11ec-1105-95f4ef08195d
-using Statistics, Plots, PlutoUI, LinearAlgebra, StatsBase, Distributions
-
-# ╔═╡ e5dfefbd-793d-4bfb-a88e-9da7e7c4027f
-begin
-	abstract type AbstractEnv end
-	abstract type AbstractAgent end
-	abstract type AbstractPolicy end
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    quote
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : missing
+        el
+    end
 end
 
-# ╔═╡ 17d67fde-7b90-4633-9eb2-877e2e4e2702
-md"# On-policy prediction with approximation"
+# ╔═╡ 4021eaec-274d-11ec-2010-b375b3434771
+using Plots, PlutoUI, LinearAlgebra, Distributions
 
-# ╔═╡ 020ade6d-2a0c-44af-96b8-fc843e8fafbd
+# ╔═╡ cb4a06fa-056e-4c7a-b7fd-38e820de808a
+md"# Off-policy methods with function approximation"
+
+# ╔═╡ c7686e1b-260c-4f1d-bfd4-bbc3de00e76d
 TableOfContents()
 
-# ╔═╡ ed0b0d7a-2be0-42ec-99b0-e893ca95b4f2
-function getindex_ext(a, s, e)
-	res = zeros(e-s+1)
-	for i = s:e
-		if i < 1
-			v = -1
-		elseif i > length(a)
-			v = 1
-		else
-			@inbounds v = a[i]
-		end
-		res[i-s+1] = v
-	end
-	return res
+# ╔═╡ 175b4eea-efdc-44d1-9539-e72bafb51f0b
+md"## Examples of off-policy divergence"
+
+# ╔═╡ d91bf0e6-3afd-4bd9-a3b6-f67b3e29b71c
+md"""
+### Baird's counterexample
+
+"""
+
+# ╔═╡ 1e4f9710-fb6b-4306-bbd2-4f6db18ff706
+function bairds_trabsition(s, a)
+	s = (a == 1) ? rand(1:6) : 7
+	0, s
 end
 
-# ╔═╡ 2e5c82df-85f6-4092-88ba-c5768337f32b
-begin
-	V_true = zeros(1000)
+# ╔═╡ 6d1bc22b-6184-4b88-a324-1628e01cd71b
+md"""
+show VE
+$(@bind plot_ve CheckBox())
+"""
+
+# ╔═╡ 46de14e3-1f1e-4396-8e19-8b1b2ba06338
+let
+	# features
+	ϕ = vcat(
+		hcat(Matrix(2.0*I, 6,6), zeros(6,1), ones(6,1)),
+		reshape([0,0,0,0,0,0,1,2], 1,8)
+	)
+	# target policy
+	p = zeros(7, 2)
+	p[:, 2] .= 1
+	# behaviour policy
+	b = zeros(7, 2)
+	b[:, 1] .= 6/7
+	b[:, 2] .= 1/7
 	
-	while true
+	# semi-gradient off-policy TD
+	α = 1e-2
+	γ = 0.99
+	w = ones(8)
+	w[7] = 10
+	h_td = [w]
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	ve(w) = sqrt(mean((ϕ*w).^2)) # VE (vₚ=0 ∀s∈S)
+	ves = [ve(w)]
+	s = rand(1:7)
+	
+	for i = 1:1000
+		a = (rand() < b[s, 1]) ? 1 : 2
+		ρ = p[s, a] / b[s, a]
+		r, s′ = bairds_trabsition(s, a)
+		w += α*ρ .* (r +  γ*v̂(s′, w) - v̂(s, w)) .* ϕ[s, :]
+		push!(h_td, w)
+		push!(ves, ve(w))
+		s = s′		
+	end
+	h_td = hcat(h_td...)
+	
+	tdplot = plot(title = "Semi-gradient off-policy TD", legend=:topleft, xlabel="steps")
+	for i = 1:size(h_td)[1]
+		plot!(tdplot, h_td[i, :], label="w$i")
+	end
+	plot_ve && plot!(tdplot, ves, linewidth=2, color="black", label="√VE")
+	
+	# semi-gradient DP
+	α = 1e-2 / size(p)[1]
+	γ = 0.99
+	w = ones(8)
+	w[7] = 10
+	h_dp = [w]
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	
+	for i = 1:1000
+		w += α .* sum([((0 + γ*v̂(7, w)) - v̂(s, w)) .* ϕ[s, :] for s = 1:7])
+		# w += α*ρ*(r +  γ*v̂(s′, w) - v̂(s, w)) .* ϕ[s, :]
+		push!(h_dp, w)		
+	end
+	h_dp = hcat(h_dp...)
+	
+	dpplot = plot(title = "Semi-gradient DP", legend=:topleft, xlabel="sweeps")
+	for i = 1:size(h_dp)[1]
+		plot!(dpplot, h_dp[i, :], label="w$i")
+	end
 		
-		delta = 0
-		for i = 1:length(V_true)
-			v_ = V_true[i]
-			V_true[i] = 0.5*mean(getindex_ext(V_true, i-100, i-1)) + 0.5*mean(mean(getindex_ext(V_true, i+1, i+100)))
-			(abs(v_ - V_true[i]) > delta) && (delta = abs(v_ - V_true[i]))
-		end
-		delta < 1e-5 && break
-	end
-	plot(V_true, ylim=[-1,1], legend=false)
+	plot(tdplot, dpplot, layout=(1,2))
 end
 
-# ╔═╡ 79580401-dfe6-4f99-a28d-bf10084f058b
-md"## Gradient Monte Carlo Algorithm"
-
-# ╔═╡ ba24dd89-0e49-48be-9846-ba2eb84cbc91
-function random_mrp_step(s::Int64)
-	a = (rand() < 0.5) ? rand(-100:-1) : rand(1:100)
+# ╔═╡ 7dc6291d-a737-4ee0-a734-d092002a31ac
+let
+	# features
+	ϕ = vcat(
+		hcat(Matrix(2.0*I, 6,6), zeros(6,1), ones(6,1)),
+		reshape([0,0,0,0,0,0,1,2], 1,8)
+	)
+	# behaviour policy
+	b = zeros(7, 2)
+	b[:, 1] .= 6/7
+	b[:, 2] .= 1/7
 	
-	s += a
-	if  s < 1
-		r = -1
-	elseif s > 1000
-		r = 1
-	else
-		r = 0
-	end
+	# Q-learning
+	α = 5e-2
+	γ = 0.99
+	w = ones(2,8)
+	w[:, 7] .= 10
+	h_ql = [w]
 	
-	a, r, s
-end
-
-# ╔═╡ 060db358-0093-46e2-aa05-8531fb7993d5
-function random_mrp()
-	s = 500
-	history = []
-	while 0 < s < 1001
-		a, r, s′ = random_mrp_step(s)
-		push!(history, (s=s, a=a, r=r))
+	q̂(s, a, w) = sum(w[a, :] .* ϕ[s, :])
+	
+	s = rand(1:7)
+		
+	for i = 1:1000
+		a = (rand() < b[s, 1]) ? 1 : 2
+		r, s′ = bairds_trabsition(s, a)
+		w[a, :] += α * (r +  γ*maximum([q̂(s′, a′, w) for a′ = 1:2]) - q̂(s, a, w)) .* ϕ[s, :]
+		push!(h_ql, copy(w))
 		s = s′
 	end
-	history
-end
-
-# ╔═╡ 536e5c0d-f266-4fc0-858d-4745d7e40460
-random_mrp()
-
-# ╔═╡ e10143d1-e45e-4cc8-86e6-2fa02472a077
-begin
-	nbin = 10
-	w = zeros(nbin)
+	h_ql = cat(h_ql..., dims=3)
+	h_ql
 	
-	for i = 1:100000
-		history = random_mrp()
-		Gt = history[end][3]
-		for (s,a,r) = history
-			bin = (s-1) ÷ (1000÷nbin) + 1
-			w[bin] += 2e-5 * (Gt - w[bin])
-		end
-		
+	qlplot = plot(title = "Semi-gradient Q-learning", legend=:topleft, xlabel="steps")
+	for i = 1:size(h_ql)[2], j=1:2
+		plot!(qlplot, h_ql[j, i, :], label="w$j$i")
 	end
+	qlplot
 	
-	w
-	xs = vcat([[i, i+1] .* 100 for i=0:9]...)
-	ys = vcat([[w[i], w[i]] for i=1:10]...)
-	p = plot(V_true, legend=false, ylim=[-1, 1])
-	plot!(p, xs, ys)
 end
 
-# ╔═╡ b7b2a0c0-9970-4ad9-8711-80ff3f952070
-md"## Semi-gradient TD(0) Algorithm"
-
-# ╔═╡ cf6c95cc-2fff-40e2-89a7-ec84e7f1eb7b
+# ╔═╡ c770e4f2-13aa-4710-9bd1-e3a22235ff02
+# or equivalently
 let
-	α = 1e-3
-	nbin = 10
-	w = zeros(nbin)
+	# features
+	ϕ = vcat(
+		hcat(Matrix(2.0*I, 6,6), zeros(6,1), ones(6,1)),
+		reshape([0,0,0,0,0,0,1,2], 1,8)
+	)
+	ϕ = [ϕ zeros(size(ϕ)); zeros(size(ϕ)) ϕ]
 	
-	for i = 1:10000
+	# behaviour policy
+	b = zeros(7, 2)
+	b[:, 1] .= 6/7
+	b[:, 2] .= 1/7
+	
+	# Q-learning
+	α = 1e-1
+	γ = 0.99
+	w = ones(2*8)
+	w[7], w[8+7] = 10, 10
+	h_ql = [w]
+
+	q̂(s, a, w) = dot(w, ϕ[a*s, :])
+	
+	s = rand(1:7)
 		
-		s = 500
-		finished = false
-		while !(finished)
-			a, r, s′ = random_mrp_step(s)
-			finished = !(0 < s′ < 1000)
-			
-			bin = (s-1) ÷ (1000÷nbin) + 1
-			bin′ = (s′-1) ÷ (1000÷nbin) + 1
-			v′ = (finished ? 0 : w[bin′])
-			w[bin] += α * (r + v′ - w[bin])
-			s = s′
-		end
-		
+	for i = 1:1000
+		a = (rand() < b[s, 1]) ? 1 : 2
+		r, s′ = bairds_trabsition(s, a)
+		w += α * (r +  γ*maximum([q̂(s′, a′, w) for a′ = 1:2]) - q̂(s, a, w)) .* ϕ[a*s, :]
+		push!(h_ql, copy(w))
+		s = s′
 	end
+	h_ql = hcat(h_ql...)
+	h_ql
 	
-	w
-	xs = vcat([[i, i+1] .* 100 for i=0:9]...)
-	ys = vcat([[w[i], w[i]] for i=1:10]...)
-	p = plot(V_true, legend=false, ylim=[-1, 1])
-	plot!(p, xs, ys)
+	qlplot = plot(title = "Semi-gradient Q-learning", legend=:topleft, xlabel="steps")
+	for i = 1:size(h_ql)[1]
+		plot!(qlplot, h_ql[i, :], label="w$i")
+	end
+	qlplot
+	
 end
 
-# ╔═╡ 1f630d25-e13e-4749-b9ee-ad429d155591
-md"## n-step semi-gradient TD"
-
-# ╔═╡ 143a24a1-045f-4b03-953b-dcb4146b16e3
+# ╔═╡ 1c074fb4-c069-41b7-9bdd-89581cc7ee37
+# TDC - Gradient TD
 let
-	γ = 1
-	α = 1e-3
-	n = 4
-	nbin = 10
-	w = zeros(nbin)
-	S = Array{Int}(undef, n)
-	R = Array{Int}(undef, n)
-	for i = 1:10000
-		
-		s = 500
-		finished = false
-		T = Inf
-		t = 0
-		while true
-			t += 1
-			if t < T
-				a = rand(1:100)
-				(rand() < 0.5) && (a *= -1)
-				s′ = s+a
-
-				if s′ < 1
-					r = -1
-					finished = true
-				elseif s′ > 1000
-					r = 1
-					finished = true
-				else
-					r = 0
-				end
-				S[mod1(t,n)] = s′
-				R[mod1(t,n)] = r
-				finished && (T=t+1)
-				
-				s = s′
-			end
-			
-			τ = t - n + 1
-			if τ > 0
-				bin = (S[mod1(τ,n)]-1) ÷ (1000÷nbin) + 1
-				((S[mod1(τ,n)] < 1) || (S[mod1(τ,n)] > 999)) && break
-				G = sum([γ^(i-τ-1)*R[mod1(i, n)] for i = τ+1:Int(min(τ+n, T))])
-				(τ+n < T) && (G += γ^n * w[(s′-1) ÷ (1000÷nbin) + 1])
-				w[bin] += α * (G - w[bin])
-			end
-			(τ == T-1) && break
-		end
-		
-	end
+	# features
+	ϕ = vcat(
+		hcat(Matrix(2.0*I, 6,6), zeros(6,1), ones(6,1)),
+		reshape([0,0,0,0,0,0,1,2], 1,8)
+	)
+	# target policy
+	p = zeros(7, 2)
+	p[:, 2] .= 1
+	# behaviour policy
+	b = zeros(7, 2)
+	b[:, 1] .= 6/7
+	b[:, 2] .= 1/7
 	
-	xs = vcat([[i, i+1] .* (1000÷nbin) for i=0:nbin-1]...)
-	ys = vcat([[w[i], w[i]] for i=1:nbin]...)
-	p = plot(V_true, legend=false, ylim=[-1, 1])
-	plot!(p, xs, ys)
+	# semi-gradient off-policy TD
+	α = 5e-3
+	β = 5e-2
+	γ = 0.99
+	w = ones(8)
+	w[7] = 10
+	v = zeros(8)
+	h_td = [w]
+	
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	ve(w) = sqrt(mean((ϕ*w).^2)) # vₚ = 0 ∀s∈S
+	
+	D = 1/7 * I
+	Π = ϕ * inv(transpose(ϕ) * D * ϕ) * transpose(ϕ) * D
+	pbe(w) = sqrt(mean(Π*[(b[s, 1]*(mean([γ*v̂(s′, w) for s′ = 1:6]) + b[s, 2]*(γ*v̂(7, w))) - v̂(s, w)) for s = 1:7] .^2))
+	
+	ves = [ve(w)]
+	pbes = [pbe(w)]
+	s = rand(1:7)
+	
+	for i = 1:1000
+		a = (rand() < b[s, 1]) ? 1 : 2
+		ρ = p[s, a] / b[s, a]
+		r, s′ = bairds_trabsition(s, a)
+		
+		δ = r +  γ*v̂(s′, w) - v̂(s, w)
+		# GTD(0) update
+		w += α*ρ * (δ .* ϕ[s, :] - γ .* ϕ[s′, :] .* (ϕ[s, :]⋅v))
+		# alternatively one can use GTD2 update
+		# w += α*ρ .* (ϕ[s, :] - γ .* ϕ[s′, :]) .* (ϕ[s, :]⋅v)
+		v += β*ρ*(δ - v⋅ϕ[s, :]) .* ϕ[s, :]
+		push!(h_td, w)
+		push!(ves, ve(w))
+		push!(pbes, pbe(w))
+		s = s′		
+	end
+	h_td = hcat(h_td...)
+	h_td
+	
+	gtdplot = plot(title = "TDC", legend=:topright, xlabel="steps", ylim=[-2.5, 10])
+	for i = 1:size(h_td)[1]
+		plot!(gtdplot, h_td[i, :], label="w$i")
+	end
+	plot!(gtdplot, ves, label="√VE", linewidth=2, color="black")
+	plot!(gtdplot, pbes, label="√PBE", linewidth=2, color="red")
+	gtdplot
+	
+	
+	# expected TDC
+	α = 5e-3
+	β = 5e-2
+	γ = 0.99
+	w = ones(8)
+	w[7] = 10
+	h_egtd = [w]
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	
+	δ(s, w) = γ*v̂(7,w) - v̂(s,w) # reward is always 0
+	
+	ve(w) = sqrt(mean((ϕ*w).^2)) # vₚ = 0 ∀s∈S
+	
+	D = 1/7 * I
+	Π = ϕ * inv(transpose(ϕ) * D * ϕ) * transpose(ϕ) * D
+	pbe(w) = sqrt(mean(Π*[(b[s, 1]*(mean([γ*v̂(s′, w) for s′ = 1:6]) + b[s, 2]*(γ*v̂(7, w))) - v̂(s, w)) for s = 1:7] .^2))
+	
+	ves = [ve(w)]
+	pbes = [pbe(w)]
+	
+	for i = 1:1000
+		v += β .*mean([(γ*v̂(7, w) - v̂(s, w) - v⋅ϕ[s, :]) .* ϕ[s, :] for s=1:7])
+		
+		w += α .*(mean([δ(s,w) .* ϕ[s,:] for s=1:7]) - γ .* mean([ϕ[7,:] * dot(ϕ[s,:],v) for s=1:7]))
+		
+		push!(h_egtd, w)
+		push!(ves, ve(w))
+		push!(pbes, pbe(w))
+	end
+	h_egtd = hcat(h_egtd...)
+	
+	egtdplot = plot(title = "Expected TDC", legend=:topright, xlabel="sweeps")
+	for i = 1:size(h_egtd)[1]
+		plot!(egtdplot, h_egtd[i, :], label="w$i")
+	end
+	plot!(egtdplot, ves, label="√VE", linewidth=2, color="black")
+	plot!(egtdplot, pbes, label="√PBE", linewidth=2, color="red")
+	egtdplot
+	
+	plot(gtdplot, egtdplot, layout=(1,2))
 end
 
-# ╔═╡ 6487e99f-12a3-46c7-a9d5-2de1ac408813
-md"TBC..."
+# ╔═╡ 3de17046-2785-4ed7-aeec-d553fe01d7d5
+let
+	# features
+	ϕ = vcat(
+		hcat(Matrix(2.0*I, 6,6), zeros(6,1), ones(6,1)),
+		reshape([0,0,0,0,0,0,1,2], 1,8)
+	)
+	# target policy
+	p = zeros(7, 2)
+	p[:, 2] .= 1
+	# behaviour policy
+	b = zeros(7, 2)
+	b[:, 1] .= 6/7
+	b[:, 2] .= 1/7
+	
+	# Emphatic TD
+	α = 1e-2
+	γ = 0.99
+	M = 1.
+	w = ones(8)
+	w[7] = 10
+	h_td = [w]
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	ve(w) = sqrt(mean((ϕ*w).^2)) # vₚ = 0 ∀s∈S
+	ves = [ve(w)]
+	s = rand(1:7)
+	
+	Ms = [M]
+	for i = 1:1000
+		a = (rand() < b[s, 1]) ? 1 : 2
+		ρ = p[s, a] / b[s, a]
+		r, s′ = bairds_trabsition(s, a)
+		
+		δ = r +  γ*v̂(s′, w) - v̂(s, w)
+		w += α*ρ*M* δ .* ϕ[s, :]
+		M = γ * ρ * M + 1
+		push!(Ms, M)
+		push!(h_td, w)
+		push!(ves, ve(w))
+		s = s′
+		ρ_ = ρ
+	end
+	h_td = hcat(h_td...)
+	
+	tdplot = plot(title = "Emphatic TD", legend=:topleft, xlabel="steps")
+	for i = 1:size(h_td)[1]
+		plot!(tdplot, h_td[i, :], label="w$i")
+	end
+	plot!(tdplot, ves, label="√VE", linewidth=2)
+	tdplot
+	
+	# Expected emphatic TD
+	α = 3e-2
+	γ = 0.99
+	w = ones(8)
+	w[7] = 10
+	h_etd = [w]
+	M = ones(7)
+	M[7] = 100
+	
+	v̂(s, w) = dot(w, ϕ[s, :])
+	δ(s, w) = γ*v̂(7,w) - v̂(s,w)
+	ve(w) = sqrt(mean((ϕ*w).^2)) # vₚ = 0 ∀s∈S
+	ves = [ve(w)]
+	
+	for i = 1:1000
+		w += α .* mean(M .* [δ(s,w) .* ϕ[s, :] for s = 1:7])
+		# M = γ.* [0,0,0,0,0,0,1] .* M .+ 1
+		push!(h_etd, w)
+		push!(ves, ve(w))
+	end
+	h_etd = hcat(h_etd...)
+	
+	etdplot = plot(title = "Expected emphatic TD", legend=:topright, xlabel="sweeps")
+	for i = 1:size(h_etd)[1]
+		plot!(etdplot, h_etd[i, :], label="w$i")
+	end
+	plot!(etdplot, ves, label="√VE", linewidth=2)	
+	plot(tdplot, etdplot, layout=(1,2))
+	
+	# maximum(Ms)
+end
+
+# ╔═╡ 860e0c2e-7718-4dfe-8832-05c0264a3873
+md"""
+### Two-state counterexample
+
+"""
+
+# ╔═╡ 151987dd-d37f-48c5-9032-09ad82338804
+function two_state_transition(s, a)
+	s = ((a == 1) ? max(1, s-1) : min(2, s+1))
+	return 0, s
+end
+
+# ╔═╡ 8656b06a-3c50-4feb-8605-d77cf3476193
+let
+	# features
+	ϕ = [1, 2]
+	# target policy
+	p = [0. 1.; 0. 1.]
+	# behaviour policy
+	b = fill(0.5, 2, 2)
+	
+	# semi-gradient off-policy TD
+	α = 1e-2
+	γ = 0.9
+	w = 1.
+	h_td = [w]
+	
+	v̂(s, w) = w*ϕ[s]
+	ve(w) = sqrt(mean((ϕ*w).^2)) # VE (vₚ=0 ∀s∈S)
+	ves = [ve(w)]
+	s = rand(1:2)
+	
+	for i = 1:500
+		a = (rand() < b[s, 1]) ? 1 : 2
+		ρ = p[s, a] / b[s, a]
+		r, s′ = two_state_transition(s, a)
+		w += α*ρ .* (r +  γ*v̂(s′, w) - v̂(s, w)) .* ϕ[s]
+		push!(h_td, w)
+		push!(ves, ve(w))
+		s = s′		
+	end
+	
+	tdplot = plot(title = "Semi-gradient off-policy TD", legend=:topleft, xlabel="steps")
+	plot!(tdplot, h_td, label="Semi-gradient TD")
+	tdplot
+	
+	# Emphatic TD
+	α = 1e-2
+	γ = 0.9
+	M = 1.
+	w = 1.
+	h_etd = [w]
+	
+	v̂(s, w) = w * ϕ[s]
+	ve(w) = sqrt(mean((ϕ*w).^2)) # vₚ = 0 ∀s∈S
+	ves = [ve(w)]
+	s = rand(1:2)
+	
+	Ms = [M]
+	for i = 1:500
+		a = (rand() < b[s, 1]) ? 1 : 2
+		ρ = p[s, a] / b[s, a]
+		r, s′ = two_state_transition(s, a)
+		
+		δ = r +  γ*v̂(s′, w) - v̂(s, w)
+		w += α*ρ*M* δ .* ϕ[s]
+		M = γ * ρ * M + 1
+		push!(Ms, M)
+		push!(h_etd, w)
+		push!(ves, ve(w))
+		s = s′
+	end
+	
+	plot!(tdplot, h_etd, label="Emphatic TD")
+	# plot!(tdplot, ves, label="√VE", linewidth=2)
+	tdplot
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -212,14 +473,11 @@ Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 Distributions = "~0.25.17"
 Plots = "~1.22.3"
 PlutoUI = "~0.7.14"
-StatsBase = "~0.33.10"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -1133,21 +1391,20 @@ version = "0.9.1+5"
 """
 
 # ╔═╡ Cell order:
-# ╟─da640d6a-244b-11ec-1105-95f4ef08195d
-# ╟─e5dfefbd-793d-4bfb-a88e-9da7e7c4027f
-# ╟─17d67fde-7b90-4633-9eb2-877e2e4e2702
-# ╟─020ade6d-2a0c-44af-96b8-fc843e8fafbd
-# ╠═2e5c82df-85f6-4092-88ba-c5768337f32b
-# ╟─ed0b0d7a-2be0-42ec-99b0-e893ca95b4f2
-# ╟─79580401-dfe6-4f99-a28d-bf10084f058b
-# ╠═ba24dd89-0e49-48be-9846-ba2eb84cbc91
-# ╠═060db358-0093-46e2-aa05-8531fb7993d5
-# ╠═536e5c0d-f266-4fc0-858d-4745d7e40460
-# ╠═e10143d1-e45e-4cc8-86e6-2fa02472a077
-# ╟─b7b2a0c0-9970-4ad9-8711-80ff3f952070
-# ╠═cf6c95cc-2fff-40e2-89a7-ec84e7f1eb7b
-# ╟─1f630d25-e13e-4749-b9ee-ad429d155591
-# ╠═143a24a1-045f-4b03-953b-dcb4146b16e3
-# ╟─6487e99f-12a3-46c7-a9d5-2de1ac408813
+# ╠═4021eaec-274d-11ec-2010-b375b3434771
+# ╟─cb4a06fa-056e-4c7a-b7fd-38e820de808a
+# ╟─c7686e1b-260c-4f1d-bfd4-bbc3de00e76d
+# ╟─175b4eea-efdc-44d1-9539-e72bafb51f0b
+# ╠═d91bf0e6-3afd-4bd9-a3b6-f67b3e29b71c
+# ╠═1e4f9710-fb6b-4306-bbd2-4f6db18ff706
+# ╟─6d1bc22b-6184-4b88-a324-1628e01cd71b
+# ╠═46de14e3-1f1e-4396-8e19-8b1b2ba06338
+# ╠═7dc6291d-a737-4ee0-a734-d092002a31ac
+# ╠═c770e4f2-13aa-4710-9bd1-e3a22235ff02
+# ╠═1c074fb4-c069-41b7-9bdd-89581cc7ee37
+# ╠═3de17046-2785-4ed7-aeec-d553fe01d7d5
+# ╟─860e0c2e-7718-4dfe-8832-05c0264a3873
+# ╠═151987dd-d37f-48c5-9032-09ad82338804
+# ╠═8656b06a-3c50-4feb-8605-d77cf3476193
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
