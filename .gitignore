@@ -25,3 +25,5 @@ Manifest.toml
 
 .vscode
 _test*
+
+.ipynb_checkpoints/
